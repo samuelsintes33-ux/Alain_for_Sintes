@@ -1,0 +1,2268 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>AlmacénPro</title>
+<meta name="theme-color" content="#173F38">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AlmacénPro">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F5F2EA;
+  --surface:#FFFFFF;
+  --surface-2:#FBF9F4;
+  --ink:#1E2420;
+  --ink-soft:#5B655F;
+  --primary:#173F38;
+  --primary-2:#2A6357;
+  --accent:#DE9A3C;
+  --accent-ink:#3A2A0D;
+  --danger:#B23A3A;
+  --ok:#3E7A4D;
+  --border:#E4DFD1;
+  --radius:16px;
+  --font-scale:1;
+  --shadow:0 1px 2px rgba(23,63,56,.04), 0 1px 12px rgba(23,63,56,.05);
+}
+*{box-sizing:border-box;}
+html{-webkit-tap-highlight-color:transparent;}
+body{
+  margin:0;
+  font-family:'Inter',system-ui,sans-serif;
+  background:var(--bg);
+  color:var(--ink);
+  font-size:calc(15px * var(--font-scale));
+  -webkit-font-smoothing:antialiased;
+  overscroll-behavior-y:none;
+}
+.mono{font-family:'JetBrains Mono',monospace;}
+button{font-family:inherit;}
+input,select,textarea{font-family:inherit;font-size:1em;}
+h1,h2,h3,h4{margin:0;font-family:'Inter',sans-serif;letter-spacing:-.01em;}
+p{margin:0;}
+img{max-width:100%;display:block;}
+
+/* ---------- SCREENS ---------- */
+.screen{display:none;min-height:100vh;}
+.screen.active{display:block;}
+
+/* Login */
+#screen-login{
+  background:var(--primary);
+  min-height:100vh;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+  color:#fff;
+}
+#screen-login.active{display:flex;}
+.login-card{width:100%;max-width:360px;text-align:center;}
+.login-mark{
+  width:56px;height:56px;border-radius:16px;background:var(--accent);
+  display:flex;align-items:center;justify-content:center;margin:0 auto 22px;
+  font-size:26px;font-weight:800;color:var(--accent-ink);
+}
+.login-title{font-size:23px;font-weight:700;margin-bottom:6px;letter-spacing:-.01em;}
+.login-sub{opacity:.6;font-size:13.5px;margin-bottom:38px;font-weight:500;}
+.role-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.role-btn{
+  background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:var(--radius);
+  padding:26px 10px;
+  color:#fff;
+  cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;gap:9px;
+  transition:.15s;
+}
+.role-btn:active{transform:scale(.97);background:rgba(255,255,255,.1);}
+.role-icon{font-size:24px;opacity:.9;}
+.role-label{font-weight:600;font-size:14px;}
+.role-desc{font-size:11px;opacity:.55;}
+.login-footer{margin-top:32px;font-size:10.5px;opacity:.4;}
+
+/* App shell */
+#screen-main{flex-direction:column;min-height:100vh;}
+#screen-main.active{display:flex;}
+.topbar{
+  position:sticky;top:0;z-index:20;
+  background:var(--primary);
+  color:#fff;
+  padding:14px 16px;
+  padding-top:calc(14px + env(safe-area-inset-top,0px));
+  display:flex;align-items:center;justify-content:space-between;
+}
+.topbar-left{display:flex;align-items:center;gap:10px;}
+.topbar-mark{width:32px;height:32px;border-radius:9px;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;}
+.topbar-title{font-size:15px;font-weight:700;}
+.topbar-role{font-size:10.5px;opacity:.75;text-transform:uppercase;letter-spacing:.06em;}
+.topbar-right{display:flex;align-items:center;gap:8px;}
+.icon-btn{
+  background:rgba(255,255,255,.12);border:none;color:#fff;width:34px;height:34px;border-radius:10px;
+  display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;
+}
+.icon-btn:active{background:rgba(255,255,255,.24);}
+
+#view-container{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
+
+.bottomnav{
+  position:fixed;bottom:0;left:0;right:0;z-index:20;
+  background:var(--surface);
+  border-top:1px solid var(--border);
+  display:flex;
+  padding:6px 4px calc(6px + env(safe-area-inset-bottom,0px));
+  box-shadow:0 -2px 12px rgba(0,0,0,.06);
+}
+.nav-btn{
+  flex:1;background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;
+  padding:6px 2px;color:var(--ink-soft);cursor:pointer;border-radius:10px;
+}
+.nav-btn .ic{font-size:19px;}
+.nav-btn .lb{font-size:9.5px;font-weight:600;}
+.nav-btn.active{color:var(--primary);}
+.nav-btn.active .ic{transform:translateY(-1px);}
+
+/* Cards / generic */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:17px;margin-bottom:12px;box-shadow:var(--shadow);}
+.section-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft);margin:20px 2px 9px;}
+.section-title:first-child{margin-top:0;}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.stack{display:flex;flex-direction:column;gap:10px;}
+.chip{display:inline-flex;align-items:center;gap:5px;background:var(--surface-2);border:1px solid var(--border);padding:4px 10px;border-radius:999px;font-size:11.5px;font-weight:600;color:var(--ink-soft);}
+.chip.warn{background:#FBEBD8;border-color:#F0CE9C;color:#8A5A17;}
+.chip.danger{background:#F8E3E1;border-color:#E9BBB6;color:#8A2E2E;}
+.chip.ok{background:#E3F1E6;border-color:#B9DEC1;color:#2C5C38;}
+.badge-num{background:var(--accent);color:var(--accent-ink);font-weight:800;font-size:11px;padding:2px 7px;border-radius:999px;}
+
+.btn{
+  border:none;border-radius:11px;padding:12px 16px;font-weight:700;font-size:14px;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+}
+.btn-primary{background:var(--primary);color:#fff;}
+.btn-primary:active{background:var(--primary-2);}
+.btn-accent{background:var(--accent);color:var(--accent-ink);}
+.btn-outline{background:transparent;border:1.5px solid var(--border);color:var(--ink);}
+.btn-danger{background:#F8E3E1;color:var(--danger);}
+.btn-ghost{background:var(--surface-2);color:var(--ink);}
+.btn-sm{padding:8px 12px;font-size:12.5px;border-radius:9px;}
+.btn-block{width:100%;}
+.fab{
+  position:fixed;right:16px;bottom:calc(78px + env(safe-area-inset-bottom,0px));
+  width:54px;height:54px;border-radius:16px;background:var(--accent);color:var(--accent-ink);
+  border:none;font-size:26px;box-shadow:0 8px 20px rgba(222,154,60,.45);cursor:pointer;z-index:15;
+  display:flex;align-items:center;justify-content:center;
+}
+
+input[type=text],input[type=number],input[type=date],input[type=search],input[type=password],select,textarea{
+  width:100%;padding:11px 12px;border:1.5px solid var(--border);border-radius:10px;background:var(--surface);color:var(--ink);
+}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--primary-2);outline-offset:1px;}
+label{font-size:12px;font-weight:700;color:var(--ink-soft);margin-bottom:5px;display:block;}
+.field{margin-bottom:12px;}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+
+.searchbar{position:relative;margin-bottom:14px;}
+.searchbar input{padding-left:36px;}
+.searchbar .sic{position:absolute;left:11px;top:50%;transform:translateY(-50%);opacity:.5;}
+
+.empty{
+  text-align:center;padding:40px 16px;color:var(--ink-soft);
+}
+.empty .eic{font-size:34px;margin-bottom:8px;}
+.empty .et{font-weight:700;color:var(--ink);margin-bottom:4px;}
+.empty .ed{font-size:12.5px;}
+
+/* Modal / sheet */
+.overlay{position:fixed;inset:0;background:rgba(15,25,20,.5);z-index:50;display:none;align-items:flex-end;justify-content:center;}
+.overlay.active{display:flex;}
+.sheet{
+  background:var(--surface);width:100%;max-width:640px;border-radius:20px 20px 0 0;
+  max-height:92vh;overflow-y:auto;padding:16px 16px calc(24px + env(safe-area-inset-bottom,0px));
+  animation:slideup .22s ease-out;
+}
+@keyframes slideup{from{transform:translateY(24px);opacity:0;}to{transform:translateY(0);opacity:1;}}
+.sheet-handle{width:38px;height:4px;background:var(--border);border-radius:99px;margin:2px auto 14px;}
+.sheet-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
+.sheet-title{font-size:17px;font-weight:800;}
+.sheet-close{background:var(--surface-2);border:none;width:30px;height:30px;border-radius:9px;font-size:15px;cursor:pointer;color:var(--ink-soft);}
+
+.toast{
+  position:fixed;left:50%;bottom:100px;transform:translateX(-50%);
+  background:var(--ink);color:#fff;padding:11px 18px;border-radius:11px;font-size:13px;font-weight:600;
+  z-index:80;box-shadow:0 6px 18px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:.25s;
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(-6px);}
+
+.list-item{display:flex;gap:12px;align-items:center;padding:11px 0;border-bottom:1px solid var(--border);}
+.list-item:last-child{border-bottom:none;}
+.thumb{width:46px;height:46px;border-radius:10px;background:var(--surface-2);display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--ink-soft);overflow:hidden;flex-shrink:0;border:1px solid var(--border);}
+.thumb img{width:100%;height:100%;object-fit:cover;}
+.li-body{flex:1;min-width:0;}
+.li-title{font-weight:700;font-size:13.8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.li-sub{font-size:11.5px;color:var(--ink-soft);margin-top:2px;}
+.li-right{text-align:right;flex-shrink:0;}
+.li-price{font-weight:800;font-size:14px;}
+.li-stock{font-size:10.5px;color:var(--ink-soft);}
+
+.tabbar{display:flex;gap:6px;overflow-x:auto;margin-bottom:12px;padding-bottom:2px;}
+.tabbar::-webkit-scrollbar{display:none;}
+.tab-pill{white-space:nowrap;padding:8px 14px;border-radius:999px;background:var(--surface-2);border:1px solid var(--border);font-size:12.5px;font-weight:700;color:var(--ink-soft);cursor:pointer;}
+.tab-pill.active{background:var(--primary);color:#fff;border-color:var(--primary);}
+
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;box-shadow:var(--shadow);}
+.stat-val{font-size:20px;font-weight:800;}
+.stat-lbl{font-size:11px;color:var(--ink-soft);font-weight:600;margin-top:2px;}
+
+.swatch-row{display:flex;gap:10px;flex-wrap:wrap;}
+.swatch{width:38px;height:38px;border-radius:11px;cursor:pointer;border:2px solid transparent;}
+.swatch.sel{border-color:var(--ink);}
+
+.denom-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);}
+.denom-row:last-child{border-bottom:none;}
+.denom-label{font-weight:700;font-size:14px;}
+.denom-input{width:78px;text-align:center;}
+.denom-sub{font-size:11px;color:var(--ink-soft);margin-top:1px;}
+
+.cart-line{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);}
+.qty-ctl{display:flex;align-items:center;gap:8px;}
+.qty-btn{width:26px;height:26px;border-radius:8px;border:1.5px solid var(--border);background:var(--surface-2);font-weight:800;cursor:pointer;}
+
+.calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
+.cal-cell{aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:9px;font-size:12.5px;font-weight:600;cursor:pointer;position:relative;color:var(--ink-soft);}
+.cal-cell.inmonth{color:var(--ink);}
+.cal-cell.today{border:1.5px solid var(--primary);}
+.cal-cell.sel{background:var(--primary);color:#fff;}
+.cal-dot{position:absolute;bottom:4px;width:4px;height:4px;border-radius:50%;background:var(--accent);}
+.cal-dow{text-align:center;font-size:10px;font-weight:700;color:var(--ink-soft);padding-bottom:4px;}
+
+.wa-preview{background:#E9FBE0;border:1px solid #BFE9AC;border-radius:12px;padding:12px;font-size:12.5px;white-space:pre-wrap;font-family:'JetBrains Mono',monospace;line-height:1.5;color:#264A1B;}
+
+hr.sep{border:none;border-top:1px solid var(--border);margin:14px 0;}
+.muted{color:var(--ink-soft);}
+.small{font-size:11.5px;}
+.text-right{text-align:right;}
+.flex-between{display:flex;justify-content:space-between;align-items:center;}
+.gap-2{display:flex;gap:8px;}
+.mt-2{margin-top:8px;}
+.mt-3{margin-top:14px;}
+.w-full{width:100%;}
+.hidden{display:none !important;}
+</style>
+</head>
+<body>
+
+<!-- ===================== LOGIN ===================== -->
+<div id="screen-login" class="screen active">
+  <div class="login-card">
+    <div class="login-mark">A</div>
+    <div class="login-title" id="loginBizName">AlmacénPro</div>
+    <div class="login-sub">Elige cómo vas a entrar</div>
+    <div class="role-grid">
+      <div class="role-btn" onclick="app.login('admin')">
+        <div class="role-icon">🗝️</div>
+        <div class="role-label">Administrador</div>
+        <div class="role-desc">Acceso total</div>
+      </div>
+      <div class="role-btn" onclick="app.login('vendedor')">
+        <div class="role-icon">🛒</div>
+        <div class="role-label">Vendedor</div>
+        <div class="role-desc">Solo ventas y consulta</div>
+      </div>
+    </div>
+    <div class="login-footer">AlmacénPro · datos guardados en este dispositivo</div>
+  </div>
+</div>
+
+<!-- ===================== APP ===================== -->
+<div id="screen-main" class="screen">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="topbar-mark">A</div>
+      <div>
+        <div class="topbar-title" id="topTitle">Inicio</div>
+        <div class="topbar-role" id="topRole">Administrador</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button class="icon-btn" onclick="app.logout()" title="Cambiar modo">⇄</button>
+    </div>
+  </div>
+
+  <main id="view-container"></main>
+
+  <nav class="bottomnav" id="bottomnav"></nav>
+  <button class="fab hidden" id="fabBtn"></button>
+</div>
+
+<!-- ===================== MODAL / SHEET ===================== -->
+<div class="overlay" id="overlay" onclick="if(event.target===this)ui.closeSheet()">
+  <div class="sheet" id="sheet"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<input type="file" id="fileInputHidden" accept="image/*" style="display:none">
+<input type="file" id="restoreInputHidden" accept="application/json" style="display:none">
+<input type="file" id="syncInputHidden" accept="application/json" style="display:none">
+
+<script>
+/* =========================================================
+   ALMACÉNPRO — App de gestión de inventario y ventas
+   Todo se guarda en localStorage del navegador/dispositivo.
+   ========================================================= */
+
+const STORE_KEY = 'almacenpro_db_v1';
+const THEMES = {
+  verde:   {primary:'#173F38', primary2:'#2A6357', accent:'#DE9A3C'},
+  azul:    {primary:'#173A56', primary2:'#2A5C82', accent:'#3CA7DE'},
+  ciruela: {primary:'#3B1D3E', primary2:'#5E3163', accent:'#DE7B9A'},
+  carbon:  {primary:'#22262B', primary2:'#3A4048', accent:'#E0B23C'},
+  terra:   {primary:'#4A2A1B', primary2:'#7A4529', accent:'#3CA789'},
+};
+
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+function todayISO(){ const d=new Date(); return d.toISOString().slice(0,10); }
+function nowStamp(){ return new Date().toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'}); }
+function fmt(n){ n = Number(n)||0; return DB.meta.currency + n.toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function usdEq(n){ const r=DB.settings.usdRate; if(!r) return ''; return '$'+((Number(n)||0)/r).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2})+' USD'; }
+function fmtUsdLine(n){ return DB.settings.usdRate>0 ? `<div class="small muted" style="margin-top:1px">≈ ${usdEq(n)}</div>` : ''; }
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function defaultDB(){
+  return {
+    deviceId: uid(),
+    meta:{bizName:'Mi Negocio', currency:'$'},
+    categories:[
+      {id:uid(), name:'General', subs:[{id:uid(), name:'Varios'}]}
+    ],
+    products:[],
+    purchases:[],
+    sales:[],
+    expenses:[],
+    cashCounts:[],
+    notes:[],
+    events:[],
+    reminders:[],
+    losses:[],
+    stockAdjustments:[],
+    settings:{fontScale:1, theme:'verde', cashDenoms:[1000,500,200,100,50,20,10,5,2,1], usdRate:0, usdRateUpdated:'', defaultMinStock:5, qtySteps:[5,10,20,24], transferSurchargePct:0, notifEnabled:false},
+    invoiceCounter: 1001
+  };
+}
+
+let DB = load();
+recomputeStock();
+function mergeWithDefaults(d){
+  const merged = Object.assign(defaultDB(), d);
+  merged.settings = Object.assign(defaultDB().settings, d.settings||{});
+  merged.meta = Object.assign(defaultDB().meta, d.meta||{});
+  return merged;
+}
+function load(){
+  try{
+    const raw = localStorage.getItem(STORE_KEY);
+    if(!raw) return defaultDB();
+    const d = JSON.parse(raw);
+    return mergeWithDefaults(d);
+  }catch(e){ return defaultDB(); }
+}
+function save(){
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
+  catch(e){ toast('No se pudo guardar (memoria llena)'); }
+}
+
+/* ---------------- STOCK BASADO EN HISTORIAL (evita conflictos al sincronizar) ---------------- */
+function deviceShort(){ return (DB.deviceId||'XXXX').slice(-4).toUpperCase(); }
+function recomputeStock(){
+  const map = {};
+  DB.products.forEach(p=> map[p.id]=0);
+  DB.purchases.forEach(pu=> pu.items.forEach(it=>{ if(map[it.productId]!=null) map[it.productId]+=it.qty; }));
+  DB.sales.forEach(s=> s.items.forEach(it=>{ if(map[it.productId]!=null) map[it.productId]-=it.qty; }));
+  (DB.stockAdjustments||[]).forEach(a=>{ if(map[a.productId]!=null) map[a.productId]+=a.delta; });
+  DB.products.forEach(p=> p.stock = map[p.id]||0);
+}
+
+/* ---------------- TOAST ---------------- */
+let toastTimer;
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>t.classList.remove('show'), 2200);
+}
+
+/* ---------------- UI: sheet / modal ---------------- */
+const ui = {
+  openSheet(html){
+    document.getElementById('sheet').innerHTML =
+      '<div class="sheet-handle"></div>' + html;
+    document.getElementById('overlay').classList.add('active');
+    fitOverlayToViewport();
+  },
+  closeSheet(){
+    document.getElementById('overlay').classList.remove('active');
+  }
+};
+
+/* Mantiene la hoja (sheet) visible por encima del teclado en móviles,
+   ajustando su altura al viewport visual real en vez del 100vh fijo. */
+function fitOverlayToViewport(){
+  const overlay = document.getElementById('overlay');
+  const sheet = document.getElementById('sheet');
+  if(!overlay) return;
+  if(window.visualViewport){
+    const vv = window.visualViewport;
+    overlay.style.height = vv.height + 'px';
+    overlay.style.top = vv.offsetTop + 'px';
+    if(sheet) sheet.style.maxHeight = (vv.height*0.94) + 'px';
+  }
+}
+if(window.visualViewport){
+  window.visualViewport.addEventListener('resize', fitOverlayToViewport);
+  window.visualViewport.addEventListener('scroll', fitOverlayToViewport);
+}
+
+/* Enter/Ir en el teclado guarda el formulario (toca el botón principal de la hoja),
+   en vez de solo bajar de línea. También evita que el foco quede oculto tras el teclado. */
+document.addEventListener('keydown', function(e){
+  if(e.key!=='Enter') return;
+  const t = e.target;
+  if(!t || t.tagName!=='INPUT') return;
+  if(!t.closest('#sheet')) return;
+  e.preventDefault();
+  const sheet = document.getElementById('sheet');
+  const mainBtn = sheet.querySelector('.btn-primary') || sheet.querySelector('.btn-accent');
+  if(mainBtn) mainBtn.click();
+});
+
+/* Al enfocar un campo dentro de una hoja, lo desplaza a la vista para que
+   no quede tapado por el teclado. */
+document.addEventListener('focusin', function(e){
+  const t = e.target;
+  if(!t || !(t.tagName==='INPUT' || t.tagName==='SELECT' || t.tagName==='TEXTAREA')) return;
+  if(!t.closest('#sheet')) return;
+  setTimeout(()=>{ t.scrollIntoView({block:'center', behavior:'smooth'}); fitOverlayToViewport(); }, 250);
+  /* Si es un campo numérico que arranca en 0, lo deja vacío para escribir directo */
+  if(t.tagName==='INPUT' && t.type==='number' && t.value==='0'){
+    t.value = '';
+  }
+});
+
+/* ---------------- APP CORE ---------------- */
+const app = {
+  role: null,
+  view: 'home',
+  invContext: {catId:null, subId:null, q:''},
+  posContext: {catId:null, subId:null, q:''},
+  cart: [],
+  saleOptions: {payment:'cash', delivery:false, deliveryFee:'', transferPct:null},
+
+  login(role){
+    this.role = role;
+    document.getElementById('screen-login').classList.remove('active');
+    document.getElementById('screen-main').classList.add('active');
+    document.getElementById('topRole').textContent = role==='admin' ? 'Administrador' : 'Vendedor';
+    applySettings();
+    buildNav();
+    this.go(role==='admin' ? 'home' : 'sales');
+    window.scrollTo(0,0);
+  },
+  logout(){
+    this.role = null;
+    document.getElementById('screen-main').classList.remove('active');
+    document.getElementById('screen-login').classList.add('active');
+    document.getElementById('loginBizName').textContent = DB.meta.bizName || 'AlmacénPro';
+    window.scrollTo(0,0);
+  },
+  go(view){
+    this.view = view;
+    ui.closeSheet();
+    renderView();
+    highlightNav();
+    window.scrollTo(0,0);
+  }
+};
+
+function applySettings(){
+  const s = DB.settings;
+  document.documentElement.style.setProperty('--font-scale', s.fontScale || 1);
+  const th = THEMES[s.theme] || THEMES.verde;
+  document.documentElement.style.setProperty('--primary', th.primary);
+  document.documentElement.style.setProperty('--primary-2', th.primary2);
+  document.documentElement.style.setProperty('--accent', th.accent);
+  document.getElementById('loginBizName').textContent = DB.meta.bizName || 'AlmacénPro';
+}
+
+/* ---------------- NAV ---------------- */
+function buildNav(){
+  const nav = document.getElementById('bottomnav');
+  let items;
+  if(app.role==='admin'){
+    items = [
+      {v:'home', ic:'🏠', lb:'Inicio'},
+      {v:'inventory', ic:'📦', lb:'Inventario'},
+      {v:'sales', ic:'🛒', lb:'Vender'},
+      {v:'cash', ic:'💵', lb:'Caja'},
+      {v:'more', ic:'⋯', lb:'Más'},
+    ];
+  } else {
+    items = [
+      {v:'sales', ic:'🛒', lb:'Vender'},
+      {v:'inventory', ic:'📦', lb:'Inventario'},
+      {v:'salehistory', ic:'🧾', lb:'Historial'},
+      {v:'cash', ic:'💵', lb:'Caja'},
+      {v:'more', ic:'⋯', lb:'Más'},
+    ];
+  }
+  nav.innerHTML = items.map(i=>
+    `<button class="nav-btn" data-v="${i.v}" onclick="handleNav('${i.v}')">
+      <span class="ic">${i.ic}</span><span class="lb">${i.lb}</span>
+    </button>`).join('');
+}
+function handleNav(v){
+  if(v==='more'){ openMoreSheet(); return; }
+  app.go(v);
+}
+function highlightNav(){
+  document.querySelectorAll('.nav-btn').forEach(b=>{
+    b.classList.toggle('active', b.dataset.v===app.view || (b.dataset.v==='more' && ['purchases','expenses','reports','calendar','settings','reminders','losses'].includes(app.view)));
+  });
+  const titles = {home:'Inicio', inventory:'Inventario', sales:'Vender', cash:'Caja',
+    purchases:'Compras', salehistory:'Historial de ventas', expenses:'Gastos y finanzas',
+    reports:'Reportes', calendar:'Calendario y notas', reminders:'Recordatorios', losses:'Pérdidas de productos', settings:'Ajustes'};
+  document.getElementById('topTitle').textContent = titles[app.view] || 'AlmacénPro';
+}
+function openMoreSheet(){
+  const admin = app.role==='admin';
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Más opciones</div>
+      <button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="stack">
+      ${admin? moreRow('purchases','🧾','Compras y facturas'):''}
+      ${admin? moreRow('salehistory','📜','Historial de ventas'):''}
+      ${admin? moreRow('losses','📉','Pérdidas de productos'):''}
+      ${admin? moreRow('expenses','💸','Gastos y finanzas'):''}
+      ${admin? moreRow('reports','📊','Reportes de productos'):''}
+      ${moreRow('calendar','🗓️','Calendario y notas')}
+      ${moreRow('reminders','⏰','Recordatorios')}
+      ${moreRow('settings','⚙️','Ajustes')}
+    </div>
+  `);
+}
+function moreRow(v,ic,lb){
+  return `<button class="btn btn-ghost btn-block" style="justify-content:flex-start;font-size:14.5px" onclick="app.go('${v}')">
+    <span style="font-size:18px;margin-right:4px">${ic}</span> ${lb}
+  </button>`;
+}
+
+/* ---------------- RENDER ROUTER ---------------- */
+function renderView(){
+  const c = document.getElementById('view-container');
+  const fab = document.getElementById('fabBtn');
+  fab.classList.add('hidden'); fab.onclick=null;
+  switch(app.view){
+    case 'home': c.innerHTML = viewHome(); break;
+    case 'inventory': c.innerHTML = viewInventory(); fab.classList.toggle('hidden', app.role!=='admin'); fab.textContent='+'; fab.onclick=()=>openProductForm(); break;
+    case 'sales': c.innerHTML = viewSales(); break;
+    case 'cash': c.innerHTML = viewCash(); break;
+    case 'purchases': c.innerHTML = viewPurchases(); fab.classList.remove('hidden'); fab.textContent='+'; fab.onclick=()=>openPurchaseForm(); break;
+    case 'salehistory': c.innerHTML = viewSaleHistory(); break;
+    case 'expenses': c.innerHTML = viewExpenses(); fab.classList.remove('hidden'); fab.textContent='+'; fab.onclick=()=>openExpenseForm(); break;
+    case 'reports': c.innerHTML = viewReports(); break;
+    case 'calendar': c.innerHTML = viewCalendar(); break;
+    case 'reminders': c.innerHTML = viewReminders(); fab.classList.remove('hidden'); fab.textContent='+'; fab.onclick=()=>openReminderForm(); break;
+    case 'losses': c.innerHTML = viewLosses(); fab.classList.remove('hidden'); fab.textContent='+'; fab.onclick=()=>openLossForm(); break;
+    case 'settings': c.innerHTML = viewSettings(); break;
+    default: c.innerHTML = viewHome();
+  }
+}
+window.addEventListener('DOMContentLoaded', ()=>{
+  document.getElementById('loginBizName').textContent = DB.meta.bizName || 'AlmacénPro';
+});
+
+/* =========================================================
+   HOME
+   ========================================================= */
+function viewHome(){
+  const today = todayISO();
+  const salesToday = DB.sales.filter(s=>s.date.slice(0,10)===today);
+  const totalToday = salesToday.reduce((a,s)=>a+s.total,0);
+  const lowStock = activeProducts().filter(p=>p.stock<=p.minStock);
+  const lastCash = DB.cashCounts[DB.cashCounts.length-1];
+
+  let html = `<div class="section-title">Resumen de hoy</div>
+  <div class="stat-grid">
+    <div class="stat-card"><div class="stat-val mono">${fmt(totalToday)}</div><div class="stat-lbl">Ventas de hoy (${salesToday.length})</div></div>
+    <div class="stat-card"><div class="stat-val mono">${lowStock.length}</div><div class="stat-lbl">Productos con stock bajo</div></div>
+    <div class="stat-card"><div class="stat-val mono">${activeProducts().length}</div><div class="stat-lbl">Productos registrados</div></div>
+    <div class="stat-card"><div class="stat-val mono">${lastCash? fmt(lastCash.total): '—'}</div><div class="stat-lbl">Último conteo de caja</div></div>
+  </div>`;
+
+  if(app.role==='admin'){
+    html += `<div class="section-title">Accesos rápidos</div>
+    <div class="stack">
+      <button class="btn btn-primary btn-block" onclick="openPurchaseForm()">🧾 Registrar compra</button>
+      <button class="btn btn-accent btn-block" onclick="app.go('sales')">🛒 Nueva venta</button>
+      <button class="btn btn-outline btn-block" onclick="app.go('cash')">💵 Contar efectivo</button>
+    </div>`;
+  }
+
+  const nowStr = new Date().toISOString().slice(0,16).replace('T',' ');
+  const pendingReminders = (DB.reminders||[]).filter(r=>!r.done && (r.date+' '+(r.time||'23:59'))<=nowStr);
+  if(pendingReminders.length){
+    html += `<div class="section-title">⏰ Recordatorios pendientes</div><div class="card">`;
+    pendingReminders.slice(0,5).forEach(r=>{
+      html += `<div class="list-item">
+        <div class="thumb">⏰</div>
+        <div class="li-body"><div class="li-title">${esc(r.title)}</div><div class="li-sub">${r.date}${r.time?' · '+r.time:''}</div></div>
+        <button class="btn btn-ghost btn-sm" onclick="toggleReminder('${r.id}')">Hecho</button>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  if(lowStock.length){
+    html += `<div class="section-title">⚠️ Alertas de stock bajo</div><div class="card">`;
+    lowStock.slice(0,8).forEach(p=>{
+      html += `<div class="list-item">
+        ${thumbHtml(p)}
+        <div class="li-body"><div class="li-title">${esc(p.name)}</div><div class="li-sub">Mínimo: ${p.minStock}</div></div>
+        <div class="li-right"><span class="chip danger">${p.stock} en stock</span></div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  return html;
+}
+
+/* =========================================================
+   INVENTARIO
+   ========================================================= */
+function thumbHtml(p){
+  return p.photo ? `<div class="thumb"><img src="${p.photo}"></div>` : `<div class="thumb">📦</div>`;
+}
+function allSubcats(){
+  const list=[];
+  DB.categories.forEach(c=>c.subs.forEach(s=>list.push({catId:c.id,catName:c.name,subId:s.id,subName:s.name})));
+  return list;
+}
+function catName(id){ const c=DB.categories.find(c=>c.id===id); return c?c.name:''; }
+function subName(catId,subId){ const c=DB.categories.find(c=>c.id===catId); const s=c&&c.subs.find(s=>s.id===subId); return s?s.name:''; }
+
+function activeProducts(){ return DB.products.filter(p=>!p.deletedAt); }
+function filterProductsByCtx(list, ctx){
+  let out = list;
+  if(ctx.catId) out = out.filter(p=>p.catId===ctx.catId);
+  if(ctx.subId) out = out.filter(p=>p.subId===ctx.subId);
+  if(ctx.q){
+    const q = ctx.q.toLowerCase();
+    out = out.filter(p=>(p.name+' '+(p.desc||'')).toLowerCase().includes(q));
+  }
+  return out;
+}
+function categoryTabsHTML(ctx, ctxVarName, onChangeFn){
+  let html = `<div class="tabbar">
+    <div class="tab-pill ${!ctx.catId?'active':''}" onclick="${ctxVarName}.catId=null;${ctxVarName}.subId=null;${onChangeFn}()">Todos</div>
+    ${DB.categories.map(c=>`<div class="tab-pill ${ctx.catId===c.id?'active':''}" onclick="${ctxVarName}.catId='${c.id}';${ctxVarName}.subId=null;${onChangeFn}()">${esc(c.name)}</div>`).join('')}
+  </div>`;
+  if(ctx.catId){
+    const cat = DB.categories.find(c=>c.id===ctx.catId);
+    if(cat && cat.subs.length){
+      html += `<div class="tabbar">
+        <div class="tab-pill ${!ctx.subId?'active':''}" onclick="${ctxVarName}.subId=null;${onChangeFn}()">Todas las subcat.</div>
+        ${cat.subs.map(s=>`<div class="tab-pill ${ctx.subId===s.id?'active':''}" onclick="${ctxVarName}.subId='${s.id}';${onChangeFn}()">${esc(s.name)}</div>`).join('')}
+      </div>`;
+    }
+  }
+  return html;
+}
+function viewInventory(){
+  const ctx = app.invContext;
+  let products = filterProductsByCtx(activeProducts(), ctx);
+  const isAdmin = app.role==='admin';
+
+  let html = `<div class="searchbar">
+    <span class="sic">🔎</span>
+    <input type="text" placeholder="Buscar producto..." value="${esc(ctx.q)}" oninput="app.invContext.q=this.value; renderView()">
+  </div>`;
+
+  html += `<div class="tabbar">
+    <div class="tab-pill ${!ctx.catId?'active':''}" onclick="app.invContext.catId=null;app.invContext.subId=null;renderView()">Todos</div>
+    ${DB.categories.map(c=>`<div class="tab-pill ${ctx.catId===c.id?'active':''}" onclick="app.invContext.catId='${c.id}';app.invContext.subId=null;renderView()">${esc(c.name)}</div>`).join('')}
+    ${isAdmin? `<div class="tab-pill" onclick="openCategoryForm()">+ Categoría</div>`:''}
+  </div>`;
+
+  if(ctx.catId){
+    const cat = DB.categories.find(c=>c.id===ctx.catId);
+    if(cat && cat.subs.length){
+      html += `<div class="tabbar">
+        <div class="tab-pill ${!ctx.subId?'active':''}" onclick="app.invContext.subId=null;renderView()">Todas las subcat.</div>
+        ${cat.subs.map(s=>`<div class="tab-pill ${ctx.subId===s.id?'active':''}" onclick="app.invContext.subId='${s.id}';renderView()">${esc(s.name)}</div>`).join('')}
+        ${isAdmin? `<div class="tab-pill" onclick="openSubcatForm('${cat.id}')">+ Subcat.</div>`:''}
+      </div>`;
+    } else if(isAdmin){
+      html += `<button class="btn btn-outline btn-sm mt-2" onclick="openSubcatForm('${cat.id}')">+ Agregar subcategoría</button>`;
+    }
+  }
+
+  if(!products.length){
+    html += `<div class="empty"><div class="eic">📦</div><div class="et">Sin productos</div>
+      <div class="ed">${isAdmin?'Toca el botón + para agregar el primero.':'No hay productos que coincidan.'}</div></div>`;
+  } else {
+    html += `<div class="card">`;
+    products.forEach(p=>{
+      const low = p.stock<=p.minStock;
+      const mainPrice = (p.prices && p.prices[0]) ? p.prices[0].price : 0;
+      html += `<div class="list-item" onclick="openProductDetail('${p.id}')" style="cursor:pointer">
+        ${thumbHtml(p)}
+        <div class="li-body">
+          <div class="li-title">${esc(p.name)}</div>
+          <div class="li-sub">${esc(catName(p.catId))}${p.subId? ' · '+esc(subName(p.catId,p.subId)):''}</div>
+        </div>
+        <div class="li-right">
+          <div class="li-price mono">${fmt(mainPrice)}</div>
+          ${fmtUsdLine(mainPrice)}
+          <div class="li-stock">${low?'<span class="chip danger">bajo</span>':''} ${p.stock} und.</div>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  return html;
+}
+
+function openCategoryForm(){
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Nueva categoría</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="field"><label>Nombre de la categoría</label><input type="text" id="fCatName" placeholder="Ej. Bebidas"></div>
+    <button class="btn btn-primary btn-block" onclick="saveCategory()">Guardar</button>
+  `);
+}
+function saveCategory(){
+  const name = document.getElementById('fCatName').value.trim();
+  if(!name) return toast('Escribe un nombre');
+  DB.categories.push({id:uid(), name, subs:[]});
+  save(); ui.closeSheet(); toast('Categoría creada'); renderView();
+}
+function openSubcatForm(catId){
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Nueva subcategoría</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="field"><label>Nombre de la subcategoría</label><input type="text" id="fSubName" placeholder="Ej. Refrescos"></div>
+    <button class="btn btn-primary btn-block" onclick="saveSubcat('${catId}')">Guardar</button>
+  `);
+}
+function saveSubcat(catId){
+  const name = document.getElementById('fSubName').value.trim();
+  if(!name) return toast('Escribe un nombre');
+  const cat = DB.categories.find(c=>c.id===catId);
+  cat.subs.push({id:uid(), name});
+  save(); ui.closeSheet(); toast('Subcategoría creada'); renderView();
+}
+
+/* ---- Producto: alta / edición ---- */
+function openProductForm(existing){
+  const p = existing || {id:null, catId:DB.categories[0]?.id, subId:'', name:'', desc:'', measures:'', photo:'', costPrice:0, prices:[{label:'Venta', price:0}], stock:0, minStock:DB.settings.defaultMinStock};
+  const cats = DB.categories;
+  window._editingProduct = JSON.parse(JSON.stringify(p));
+  window._editingProduct.prices = window._editingProduct.prices && window._editingProduct.prices.length ? window._editingProduct.prices : [{label:'Venta', price:0}];
+
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">${existing?'Editar producto':'Nuevo producto'}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="field" style="text-align:center">
+      <div class="thumb" id="prodPhotoPreview" style="width:84px;height:84px;margin:0 auto 8px;border-radius:14px;font-size:30px;">
+        ${p.photo?`<img src="${p.photo}">`:'📦'}
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="document.getElementById('fileInputHidden').click()">Elegir foto</button>
+    </div>
+    <div class="field"><label>Nombre del producto</label><input type="text" id="fpName" value="${esc(p.name)}" placeholder="Ej. Playera talla M"></div>
+    <div class="field-row">
+      <div class="field"><label>Categoría</label>
+        <select id="fpCat" onchange="fillSubSelect(this.value)">
+          ${cats.map(c=>`<option value="${c.id}" ${c.id===p.catId?'selected':''}>${esc(c.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Subcategoría</label><select id="fpSub"></select></div>
+    </div>
+    <div class="field"><label>Descripción</label><textarea id="fpDesc" rows="2" placeholder="Detalles del producto">${esc(p.desc)}</textarea></div>
+    <div class="field"><label>Medidas / presentación</label><input type="text" id="fpMeasures" value="${esc(p.measures)}" placeholder="Ej. 30x20cm, talla M, 1L"></div>
+    <div class="field-row">
+      <div class="field"><label>Precio de compra (costo)</label><input type="number" step="0.01" id="fpCost" value="${p.costPrice}"></div>
+      <div class="field"><label>Stock actual</label><input type="number" id="fpStock" value="${p.stock}"></div>
+    </div>
+    <div class="field"><label>Alerta de stock bajo (mínimo)</label><input type="number" id="fpMin" value="${p.minStock}"></div>
+    <label>Precios de venta (puedes agregar varios: menudeo, mayoreo, etc.)</label>
+    <div id="priceRangeList" class="stack mt-2"></div>
+    <button class="btn btn-ghost btn-sm mt-2" onclick="addPriceRow()">+ Agregar precio</button>
+    <button class="btn btn-primary btn-block mt-3" onclick="saveProduct()">Guardar producto</button>
+    ${existing? `<button class="btn btn-danger btn-block mt-2" onclick="deleteProduct('${p.id}')">Eliminar producto</button>`:''}
+  `);
+  fillSubSelect(p.catId, p.subId);
+  renderPriceRows();
+}
+function fillSubSelect(catId, selectedSub){
+  const cat = DB.categories.find(c=>c.id===catId);
+  const sel = document.getElementById('fpSub');
+  sel.innerHTML = `<option value="">(ninguna)</option>` + (cat?cat.subs.map(s=>`<option value="${s.id}" ${s.id===selectedSub?'selected':''}>${esc(s.name)}</option>`).join(''):'');
+}
+function renderPriceRows(){
+  const wrap = document.getElementById('priceRangeList');
+  wrap.innerHTML = window._editingProduct.prices.map((pr,i)=>`
+    <div class="gap-2">
+      <input type="text" placeholder="Etiqueta (ej. Mayoreo)" value="${esc(pr.label)}" style="flex:1.3" oninput="window._editingProduct.prices[${i}].label=this.value">
+      <input type="number" step="0.01" placeholder="Precio" value="${pr.price}" style="flex:1" oninput="window._editingProduct.prices[${i}].price=parseFloat(this.value)||0">
+      ${window._editingProduct.prices.length>1?`<button class="btn btn-danger btn-sm" onclick="removePriceRow(${i})">✕</button>`:''}
+    </div>`).join('');
+}
+function addPriceRow(){ window._editingProduct.prices.push({label:'',price:0}); renderPriceRows(); }
+function removePriceRow(i){ window._editingProduct.prices.splice(i,1); renderPriceRows(); }
+
+document.getElementById('fileInputHidden').addEventListener('change', function(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev){
+    const img = new Image();
+    img.onload = function(){
+      const canvas = document.createElement('canvas');
+      const maxDim = 360;
+      let w=img.width, h=img.height;
+      if(w>h){ if(w>maxDim){h=h*maxDim/w; w=maxDim;} } else { if(h>maxDim){w=w*maxDim/h; h=maxDim;} }
+      canvas.width=w; canvas.height=h;
+      canvas.getContext('2d').drawImage(img,0,0,w,h);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+      window._editingProduct.photo = dataUrl;
+      const prev = document.getElementById('prodPhotoPreview');
+      if(prev) prev.innerHTML = `<img src="${dataUrl}">`;
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+  e.target.value='';
+});
+
+function saveProduct(){
+  const name = document.getElementById('fpName').value.trim();
+  if(!name) return toast('Escribe el nombre del producto');
+  const ep = window._editingProduct;
+  const isNew = !ep.id;
+  const enteredStock = parseFloat(document.getElementById('fpStock').value)||0;
+  const currentStock = isNew ? 0 : (DB.products.find(p=>p.id===ep.id)?.stock || 0);
+  const data = {
+    id: ep.id || uid(),
+    catId: document.getElementById('fpCat').value,
+    subId: document.getElementById('fpSub').value,
+    name,
+    desc: document.getElementById('fpDesc').value.trim(),
+    measures: document.getElementById('fpMeasures').value.trim(),
+    photo: ep.photo || '',
+    costPrice: parseFloat(document.getElementById('fpCost').value)||0,
+    stock: currentStock,
+    minStock: parseFloat(document.getElementById('fpMin').value)||0,
+    prices: ep.prices.filter(pr=>pr.label.trim()!=='').map(pr=>({label:pr.label.trim(),price:pr.price||0})),
+    createdAt: ep.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  if(!data.prices.length) data.prices=[{label:'Venta', price:0}];
+  const idx = DB.products.findIndex(p=>p.id===data.id);
+  if(idx>=0) DB.products[idx]=data; else DB.products.push(data);
+  const delta = enteredStock - currentStock;
+  if(delta !== 0){
+    DB.stockAdjustments.push({id:uid(), productId:data.id, delta, reason: isNew?'Stock inicial':'Ajuste manual', ts:new Date().toISOString()});
+  }
+  recomputeStock();
+  save(); ui.closeSheet(); toast('Producto guardado'); renderView();
+}
+function deleteProduct(id){
+  if(!confirm('¿Eliminar este producto? Desaparecerá del inventario (se conserva en el historial).')) return;
+  const p = DB.products.find(p=>p.id===id);
+  if(p){ p.deletedAt = new Date().toISOString(); p.updatedAt = p.deletedAt; }
+  save(); ui.closeSheet(); toast('Producto eliminado'); renderView();
+}
+function openProductDetail(id){
+  const p = DB.products.find(p=>p.id===id);
+  if(!p) return;
+  const isAdmin = app.role==='admin';
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">${esc(p.name)}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div style="text-align:center;margin-bottom:12px">
+      <div class="thumb" style="width:100px;height:100px;margin:0 auto;border-radius:16px;font-size:34px;">${p.photo?`<img src="${p.photo}">`:'📦'}</div>
+    </div>
+    <div class="card">
+      <div class="row"><span class="muted small">Categoría</span><span>${esc(catName(p.catId))}${p.subId?' / '+esc(subName(p.catId,p.subId)):''}</span></div>
+      ${p.measures?`<div class="row mt-2"><span class="muted small">Medidas</span><span>${esc(p.measures)}</span></div>`:''}
+      <div class="row mt-2"><span class="muted small">Stock</span><span class="${p.stock<=p.minStock?'chip danger':'chip ok'}">${p.stock} unidades</span></div>
+      ${isAdmin?`<div class="row mt-2"><span class="muted small">Costo</span><span class="mono">${fmt(p.costPrice)} <span class="muted">(${usdEq(p.costPrice)||'—'})</span></span></div>`:''}
+      ${p.desc?`<hr class="sep"><div class="small">${esc(p.desc)}</div>`:''}
+    </div>
+    <div class="section-title">Precios de venta</div>
+    <div class="card">
+      ${p.prices.map(pr=>`<div class="row" style="padding:6px 0"><span>${esc(pr.label)}</span><span style="text-align:right"><span class="mono" style="font-weight:800">${fmt(pr.price)}</span>${fmtUsdLine(pr.price)}</span></div>`).join('')}
+    </div>
+    ${isAdmin?`<button class="btn btn-primary btn-block mt-2" onclick="openProductForm(DB.products.find(x=>x.id==='${p.id}'))">Editar producto</button>`:
+      `<button class="btn btn-accent btn-block mt-2" onclick="ui.closeSheet();addToCart('${p.id}')">Agregar a la venta</button>`}
+  `);
+}
+
+/* =========================================================
+   COMPRAS (con factura y mensaje de WhatsApp)
+   ========================================================= */
+function viewPurchases(){
+  if(!DB.purchases.length){
+    return `<div class="empty"><div class="eic">🧾</div><div class="et">Sin compras registradas</div><div class="ed">Toca + para registrar una compra a proveedor.</div></div>`;
+  }
+  let html = `<div class="card">`;
+  DB.purchases.slice().reverse().forEach(pu=>{
+    html += `<div class="list-item" style="cursor:pointer" onclick="viewInvoice('${pu.id}')">
+      <div class="thumb">🧾</div>
+      <div class="li-body"><div class="li-title">${esc(pu.supplier||'Proveedor')}</div><div class="li-sub">Factura #${pu.invoiceNo} · ${pu.date}</div></div>
+      <div class="li-right"><div class="li-price mono">${fmt(pu.total)}</div>${fmtUsdLine(pu.total)}<div class="li-stock">${pu.items.length} items</div></div>
+    </div>`;
+  });
+  html += `</div>`;
+  return html;
+}
+function openPurchaseForm(){
+  window._purchaseCart = [];
+  window._pfSelectedProduct = null;
+  window._pfContext = {catId:null, subId:null, q:''};
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Nueva compra</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="field"><label>Proveedor</label><input type="text" id="pfSupplier" placeholder="Nombre del proveedor"></div>
+    <div class="field"><label>Fecha</label><input type="date" id="pfDate" value="${todayISO()}"></div>
+    <hr class="sep">
+    <label>Agregar producto a la compra</label>
+    <div id="pfSelectedBox" class="mt-2"></div>
+    <div id="pfPicker" class="mt-2"></div>
+
+    <div class="field-row mt-2">
+      <div class="field">
+        <label>Cantidad</label>
+        <input type="number" id="pfQty" value="0" oninput="updatePfLineTotal()">
+        <div class="gap-2 mt-2" id="pfQtySteps"></div>
+      </div>
+      <div class="field"><label>Costo unitario</label><input type="number" step="0.01" id="pfCost" value="0" oninput="updatePfLineTotal()"></div>
+    </div>
+    <div class="small muted" id="pfLineTotal" style="margin-bottom:8px"></div>
+    <button class="btn btn-ghost btn-block" onclick="addPurchaseLine()">+ Agregar a la compra</button>
+    <div id="purchaseLines" class="stack mt-2"></div>
+    <div class="row mt-3"><span style="font-weight:800">Total</span><span style="text-align:right"><span class="mono" style="font-weight:800" id="purchaseTotal">${fmt(0)}</span><div class="small muted" id="purchaseTotalUsd"></div></span></div>
+    <button class="btn btn-primary btn-block mt-2" onclick="savePurchase()">Guardar y generar factura</button>
+  `);
+  renderPfQtySteps();
+  renderPurchaseLines();
+  renderPfPicker();
+}
+function renderPfPicker(){
+  const wrap = document.getElementById('pfPicker');
+  if(!wrap) return;
+  const ctx = window._pfContext;
+  let html = categoryTabsHTML(ctx, 'window._pfContext', 'renderPfPicker');
+  html += `<div class="searchbar" style="margin-bottom:8px">
+    <span class="sic">🔎</span>
+    <input type="text" placeholder="Buscar producto..." value="${esc(ctx.q)}" oninput="window._pfContext.q=this.value; renderPfPicker()">
+  </div>`;
+  const list = filterProductsByCtx(activeProducts(), ctx);
+  html += `<div class="card" style="max-height:220px;overflow-y:auto;padding:6px 12px">`;
+  if(!list.length){
+    html += `<div class="small muted" style="padding:8px 0">Sin resultados</div>`;
+  } else {
+    html += list.map(p=>`
+      <div class="list-item" style="cursor:pointer" onclick="selectPfProduct('${p.id}')">
+        ${thumbHtml(p)}
+        <div class="li-body"><div class="li-title">${esc(p.name)}</div><div class="li-sub">Costo actual: ${fmt(p.costPrice)} · ${p.stock} en stock</div></div>
+      </div>`).join('');
+  }
+  html += `</div>`;
+  wrap.innerHTML = html;
+}
+function renderPfQtySteps(){
+  const wrap = document.getElementById('pfQtySteps');
+  if(!wrap) return;
+  wrap.innerHTML = `<div class="gap-2">` + DB.settings.qtySteps.map(n=>
+    `<button class="btn btn-outline btn-sm" onclick="bumpPfQty(-${n})">−${n}</button>`
+  ).join('') + `</div><div class="gap-2 mt-2">` + DB.settings.qtySteps.map(n=>
+    `<button class="btn btn-outline btn-sm" onclick="bumpPfQty(${n})">+${n}</button>`
+  ).join('') + `</div>`;
+}
+function bumpPfQty(n){
+  const el = document.getElementById('pfQty');
+  el.value = Math.max(0, (parseFloat(el.value)||0) + n);
+  updatePfLineTotal();
+}
+function selectPfProduct(pid){
+  const p = DB.products.find(p=>p.id===pid);
+  if(!p) return;
+  window._pfSelectedProduct = p;
+  document.getElementById('pfSelectedBox').innerHTML = `
+    <div class="list-item" style="background:var(--surface-2);border-radius:10px;padding:8px 10px">
+      ${thumbHtml(p)}
+      <div class="li-body"><div class="li-title">${esc(p.name)}</div><div class="li-sub">Seleccionado</div></div>
+      <button class="btn btn-danger btn-sm" onclick="window._pfSelectedProduct=null;document.getElementById('pfSelectedBox').innerHTML=''">✕</button>
+    </div>`;
+  document.getElementById('pfCost').value = p.costPrice || 0;
+  updatePfLineTotal();
+}
+function updatePfLineTotal(){
+  const el = document.getElementById('pfLineTotal');
+  if(!el) return;
+  const qty = parseFloat(document.getElementById('pfQty').value)||0;
+  const cost = parseFloat(document.getElementById('pfCost').value)||0;
+  el.textContent = qty && cost ? `Subtotal: ${fmt(qty*cost)}` : '';
+}
+function addPurchaseLine(){
+  const p = window._pfSelectedProduct;
+  const qty = parseFloat(document.getElementById('pfQty').value)||0;
+  const cost = parseFloat(document.getElementById('pfCost').value)||0;
+  if(!p || qty<=0) return toast('Busca y selecciona un producto primero');
+  window._purchaseCart.push({productId:p.id, qty, cost});
+  window._pfSelectedProduct = null;
+  document.getElementById('pfSelectedBox').innerHTML='';
+  document.getElementById('pfQty').value = 0;
+  document.getElementById('pfCost').value = 0;
+  document.getElementById('pfLineTotal').textContent = '';
+  renderPurchaseLines();
+}
+function renderPurchaseLines(){
+  const wrap = document.getElementById('purchaseLines');
+  let total=0;
+  wrap.innerHTML = window._purchaseCart.map((l,i)=>{
+    const p = DB.products.find(p=>p.id===l.productId);
+    total += l.qty*l.cost;
+    return `<div class="cart-line"><div class="li-body"><div class="li-title">${esc(p?p.name:'?')}</div><div class="li-sub">${l.qty} x ${fmt(l.cost)}</div></div>
+      <div style="text-align:right"><div class="mono" style="font-weight:700">${fmt(l.qty*l.cost)}</div>${fmtUsdLine(l.qty*l.cost)}</div>
+      <button class="btn btn-danger btn-sm" onclick="window._purchaseCart.splice(${i},1);renderPurchaseLines()">✕</button></div>`;
+  }).join('');
+  document.getElementById('purchaseTotal').textContent = fmt(total);
+  document.getElementById('purchaseTotalUsd').innerHTML = DB.settings.usdRate>0 ? '≈ '+usdEq(total) : '';
+}
+function savePurchase(){
+  if(!window._purchaseCart.length) return toast('Agrega al menos un producto');
+  const supplier = document.getElementById('pfSupplier').value.trim();
+  const date = document.getElementById('pfDate').value || todayISO();
+  const items = window._purchaseCart;
+  const total = items.reduce((a,l)=>a+l.qty*l.cost,0);
+  const invoiceNo = DB.invoiceCounter+'-'+deviceShort();
+  DB.invoiceCounter++;
+  const purchase = {id:uid(), date, supplier, items, total, invoiceNo, createdAt:new Date().toISOString()};
+  DB.purchases.push(purchase);
+  items.forEach(l=>{
+    const p = DB.products.find(p=>p.id===l.productId);
+    if(p){ p.costPrice = l.cost; p.updatedAt = new Date().toISOString(); }
+  });
+  recomputeStock();
+  save();
+  toast('Compra registrada');
+  viewInvoice(purchase.id);
+}
+function viewInvoice(purchaseId){
+  const pu = DB.purchases.find(p=>p.id===purchaseId);
+  if(!pu) return;
+  const lines = pu.items.map(l=>{
+    const p = DB.products.find(p=>p.id===l.productId);
+    return {name:p?p.name:'Producto', qty:l.qty, cost:l.cost, sub:l.qty*l.cost};
+  });
+  const waText = buildWhatsappPurchaseText(pu, lines);
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Factura #${pu.invoiceNo}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="card" id="invoiceArea">
+      <div class="row"><b>${esc(DB.meta.bizName)}</b><span class="small muted">${pu.date}</span></div>
+      <div class="small muted mt-2">Proveedor: ${esc(pu.supplier||'—')}</div>
+      <hr class="sep">
+      ${lines.map(l=>`<div class="row" style="padding:4px 0"><span class="small">${esc(l.name)} x${l.qty}</span><span style="text-align:right"><span class="mono small">${fmt(l.sub)}</span>${fmtUsdLine(l.sub)}</span></div>`).join('')}
+      <hr class="sep">
+      <div class="row"><b>Total</b><span style="text-align:right"><b class="mono">${fmt(pu.total)}</b>${fmtUsdLine(pu.total)}</span></div>
+    </div>
+    <div class="section-title">Mensaje para WhatsApp</div>
+    <div class="wa-preview" id="waMsg">${esc(waText)}</div>
+    <div class="gap-2 mt-2">
+      <button class="btn btn-ghost btn-block" onclick="copyToClipboard(\`${waText.replace(/`/g,"'")}\`)">📋 Copiar mensaje</button>
+      <button class="btn btn-accent btn-block" onclick="window.open('https://wa.me/?text='+encodeURIComponent(\`${waText.replace(/`/g,"'")}\`),'_blank')">💬 Abrir WhatsApp</button>
+    </div>
+    <button class="btn btn-outline btn-block mt-2" onclick="window.print()">🖨️ Imprimir / guardar como PDF</button>
+  `);
+}
+function buildWhatsappPurchaseText(pu, lines){
+  let t = `🧾 *${DB.meta.bizName}*\nCompra / Factura #${pu.invoiceNo}\nFecha: ${pu.date}\nProveedor: ${pu.supplier||'—'}\n\n`;
+  lines.forEach(l=> t += `• ${l.name} x${l.qty} — ${fmt(l.sub)}\n`);
+  t += `\n*Total: ${fmt(pu.total)}*`;
+  if(DB.settings.usdRate>0) t += ` (≈ ${usdEq(pu.total)})`;
+  return t;
+}
+function copyToClipboard(text){
+  navigator.clipboard? navigator.clipboard.writeText(text).then(()=>toast('Mensaje copiado')).catch(()=>fallbackCopy(text))
+   : fallbackCopy(text);
+}
+function fallbackCopy(text){
+  const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); toast('Mensaje copiado'); }catch(e){ toast('No se pudo copiar'); }
+  document.body.removeChild(ta);
+}
+
+/* =========================================================
+   VENTAS (POS)
+   ========================================================= */
+function viewSales(){
+  const ctx = app.posContext;
+  let html = categoryTabsHTML(ctx, 'app.posContext', 'renderView');
+  html += `<div class="searchbar"><span class="sic">🔎</span>
+    <input type="text" id="posSearch" placeholder="Buscar producto para vender..." value="${esc(ctx.q)}" oninput="app.posContext.q=this.value; renderPosResults()"></div>
+    <div id="posResults" class="card"></div>
+    <div class="section-title">Carrito</div>
+    <div id="cartWrap"></div>`;
+  setTimeout(()=>{ renderPosResults(); renderCart(); },0);
+  return html;
+}
+function renderPosResults(){
+  const wrap = document.getElementById('posResults');
+  if(!wrap) return;
+  const ctx = app.posContext;
+  let list = filterProductsByCtx(activeProducts(), ctx);
+  if(!list.length){ wrap.innerHTML = `<div class="empty" style="padding:20px"><div class="ed">Sin resultados</div></div>`; return; }
+  wrap.innerHTML = list.map(p=>`
+    <div class="list-item" style="cursor:pointer" onclick="addToCart('${p.id}')">
+      ${thumbHtml(p)}
+      <div class="li-body"><div class="li-title">${esc(p.name)}</div><div class="li-sub">${p.stock} disponibles</div></div>
+      <div class="li-right"><div class="li-price mono">${fmt(p.prices[0]?p.prices[0].price:0)}</div>${fmtUsdLine(p.prices[0]?p.prices[0].price:0)}</div>
+    </div>`).join('');
+}
+function addToCart(pid){
+  const p = DB.products.find(p=>p.id===pid);
+  if(!p) return;
+  if(p.stock<=0) return toast('Sin stock disponible');
+  let line = app.cart.find(l=>l.productId===pid);
+  if(line){ if(line.qty<p.stock) line.qty++; else toast('No hay más stock'); }
+  else app.cart.push({productId:pid, qty:1, priceIndex:0});
+  renderCart();
+  toast(p.name+' agregado');
+}
+function renderCart(){
+  const wrap = document.getElementById('cartWrap');
+  if(!wrap) return;
+  if(!app.cart.length){ wrap.innerHTML = `<div class="empty" style="padding:24px"><div class="eic">🛒</div><div class="ed">Agrega productos para iniciar una venta</div></div>`; return; }
+  let subtotal=0;
+  let html = `<div class="card">`;
+  app.cart.forEach((l,i)=>{
+    const p = DB.products.find(p=>p.id===l.productId);
+    if(!p) return;
+    const price = p.prices[l.priceIndex]?p.prices[l.priceIndex].price:p.prices[0].price;
+    const sub = price*l.qty;
+    subtotal += sub;
+    html += `<div class="cart-line">
+      <div class="li-body">
+        <div class="li-title">${esc(p.name)}</div>
+        ${p.prices.length>1?`<select style="margin-top:4px;padding:4px 6px;font-size:11px" onchange="app.cart[${i}].priceIndex=parseInt(this.value);renderCart()">
+          ${p.prices.map((pr,pi)=>`<option value="${pi}" ${pi===l.priceIndex?'selected':''}>${esc(pr.label)} — ${fmt(pr.price)}</option>`).join('')}
+        </select>`:''}
+      </div>
+      <div class="qty-ctl">
+        <button class="qty-btn" onclick="changeQty(${i},-1)">−</button>
+        <span class="mono">${l.qty}</span>
+        <button class="qty-btn" onclick="changeQty(${i},1)">+</button>
+      </div>
+      <div style="width:78px;text-align:right">
+        <div class="mono" style="font-weight:800">${fmt(sub)}</div>
+        ${fmtUsdLine(sub)}
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+
+  const opts = app.saleOptions;
+  const defaultPct = DB.settings.transferSurchargePct||0;
+  const surchargePct = opts.payment==='transfer' ? (opts.transferPct!=null ? opts.transferPct : defaultPct) : defaultPct;
+  const surchargeAmt = opts.payment==='transfer' ? subtotal*surchargePct/100 : 0;
+  const deliveryFee = opts.delivery ? (parseFloat(opts.deliveryFee)||0) : 0;
+  const total = subtotal + surchargeAmt + deliveryFee;
+
+  html += `<div class="card">
+    <label>Forma de pago</label>
+    <div class="gap-2 mt-2">
+      <button class="btn ${opts.payment==='cash'?'btn-primary':'btn-outline'} btn-block btn-sm" onclick="app.saleOptions.payment='cash';renderCart()">💵 Efectivo</button>
+      <button class="btn ${opts.payment==='transfer'?'btn-primary':'btn-outline'} btn-block btn-sm" onclick="app.saleOptions.payment='transfer';app.saleOptions.transferPct=DB.settings.transferSurchargePct||0;renderCart()">💳 Transferencia${defaultPct>0?' (+'+defaultPct+'%)':''}</button>
+    </div>
+    ${opts.payment==='transfer'?`<div class="field mt-2" style="margin-bottom:0"><label>Recargo para esta venta (%)</label><input type="number" step="0.1" id="transferPctInput" value="${surchargePct}" oninput="app.saleOptions.transferPct=parseFloat(this.value)||0;updateCartSummary()"></div>`:''}
+    <hr class="sep">
+    <label class="row" style="cursor:pointer" onclick="app.saleOptions.delivery=!app.saleOptions.delivery;renderCart()">
+      <span>🛵 Entrega a domicilio</span>
+      <span class="chip ${opts.delivery?'ok':''}">${opts.delivery?'Sí':'No'}</span>
+    </label>
+    ${opts.delivery?`<div class="field mt-2" style="margin-bottom:0"><label>Costo del domicilio</label><input type="number" step="0.01" id="deliveryFeeInput" value="${opts.deliveryFee||''}" placeholder="0" oninput="app.saleOptions.deliveryFee=this.value;updateCartSummary()"></div>`:''}
+  </div>
+
+  <div class="card" id="cartSummary">
+    ${cartSummaryHtml(subtotal, surchargePct, surchargeAmt, deliveryFee, total)}
+  </div>
+  <div class="gap-2">
+    <button class="btn btn-outline btn-block" onclick="app.cart=[];resetSaleOptions();renderCart()">Vaciar</button>
+    <button class="btn btn-primary btn-block" onclick="checkout()">Cobrar</button>
+  </div>`;
+  wrap.innerHTML = html;
+}
+function cartSummaryHtml(subtotal, surchargePct, surchargeAmt, deliveryFee, total){
+  return `<div class="row"><span class="small muted">Subtotal</span><span class="mono small">${fmt(subtotal)}</span></div>
+    ${surchargeAmt>0?`<div class="row mt-2"><span class="small muted">Recargo transferencia (${surchargePct}%)</span><span class="mono small">${fmt(surchargeAmt)}</span></div>`:''}
+    ${deliveryFee>0?`<div class="row mt-2"><span class="small muted">Domicilio</span><span class="mono small">${fmt(deliveryFee)}</span></div>`:''}
+    <hr class="sep">
+    <div class="row"><span style="font-weight:800;font-size:16px">Total</span>
+      <span style="text-align:right"><span class="mono" style="font-weight:800;font-size:18px">${fmt(total)}</span>${fmtUsdLine(total)}</span></div>`;
+}
+function updateCartSummary(){
+  const summaryWrap = document.getElementById('cartSummary');
+  if(!summaryWrap) return;
+  let subtotal=0;
+  app.cart.forEach(l=>{
+    const p = DB.products.find(p=>p.id===l.productId);
+    if(!p) return;
+    const price = p.prices[l.priceIndex]?p.prices[l.priceIndex].price:p.prices[0].price;
+    subtotal += price*l.qty;
+  });
+  const opts = app.saleOptions;
+  const defaultPct = DB.settings.transferSurchargePct||0;
+  const surchargePct = opts.payment==='transfer' ? (opts.transferPct!=null ? opts.transferPct : defaultPct) : defaultPct;
+  const surchargeAmt = opts.payment==='transfer' ? subtotal*surchargePct/100 : 0;
+  const deliveryFee = opts.delivery ? (parseFloat(opts.deliveryFee)||0) : 0;
+  const total = subtotal + surchargeAmt + deliveryFee;
+  summaryWrap.innerHTML = cartSummaryHtml(subtotal, surchargePct, surchargeAmt, deliveryFee, total);
+}
+function resetSaleOptions(){ app.saleOptions = {payment:'cash', delivery:false, deliveryFee:'', transferPct:null}; }
+function changeQty(i, delta){
+  const l = app.cart[i];
+  const p = DB.products.find(p=>p.id===l.productId);
+  const newQty = l.qty+delta;
+  if(newQty<=0){ app.cart.splice(i,1); renderCart(); return; }
+  if(newQty>p.stock){ toast('No hay más stock'); return; }
+  l.qty = newQty;
+  renderCart();
+}
+function checkout(){
+  if(!app.cart.length) return;
+  const items = app.cart.map(l=>{
+    const p = DB.products.find(p=>p.id===l.productId);
+    const price = p.prices[l.priceIndex]?p.prices[l.priceIndex].price:p.prices[0].price;
+    return {productId:l.productId, name:p.name, qty:l.qty, priceLabel:p.prices[l.priceIndex]?p.prices[l.priceIndex].label:p.prices[0].label, price};
+  });
+  const subtotal = items.reduce((a,l)=>a+l.qty*l.price,0);
+  const opts = app.saleOptions;
+  const surchargePct = opts.payment==='transfer' ? (opts.transferPct!=null ? opts.transferPct : (DB.settings.transferSurchargePct||0)) : 0;
+  const surchargeAmt = subtotal*surchargePct/100;
+  const deliveryFee = opts.delivery ? (parseFloat(opts.deliveryFee)||0) : 0;
+  const total = subtotal + surchargeAmt + deliveryFee;
+  const sale = {
+    id:uid(), date:new Date().toISOString(), items, subtotal, total, seller: app.role,
+    payment: opts.payment, transferSurchargePct: surchargePct, transferSurchargeAmount: surchargeAmt,
+    isDelivery: !!opts.delivery, deliveryFee: deliveryFee
+  };
+  DB.sales.push(sale);
+  recomputeStock();
+  app.cart = [];
+  resetSaleOptions();
+  save();
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">✅ Venta registrada</div><button class="sheet-close" onclick="ui.closeSheet();app.go('sales')">✕</button></div>
+    <div class="card">
+      ${items.map(it=>`<div class="row" style="padding:4px 0"><span class="small">${esc(it.name)} x${it.qty}</span><span style="text-align:right"><span class="mono small">${fmt(it.qty*it.price)}</span>${fmtUsdLine(it.qty*it.price)}</span></div>`).join('')}
+      ${surchargeAmt>0?`<div class="row" style="padding:4px 0"><span class="small muted">Recargo transferencia (${surchargePct}%)</span><span class="mono small">${fmt(surchargeAmt)}</span></div>`:''}
+      ${deliveryFee>0?`<div class="row" style="padding:4px 0"><span class="small muted">Domicilio</span><span class="mono small">${fmt(deliveryFee)}</span></div>`:''}
+      <hr class="sep"><div class="row"><b>Total</b><span style="text-align:right"><b class="mono">${fmt(total)}</b>${fmtUsdLine(total)}</span></div>
+      <div class="gap-2 mt-2">
+        <span class="chip">${opts.payment==='transfer'?'💳 Transferencia':'💵 Efectivo'}</span>
+        ${opts.delivery?'<span class="chip">🛵 A domicilio</span>':''}
+      </div>
+    </div>
+    <button class="btn btn-primary btn-block" onclick="ui.closeSheet();app.go('sales')">Nueva venta</button>
+  `);
+}
+
+function viewSaleHistory(){
+  if(!DB.sales.length) return `<div class="empty"><div class="eic">📜</div><div class="et">Sin ventas todavía</div></div>`;
+  let html = `<div class="card">`;
+  DB.sales.slice().reverse().forEach(s=>{
+    const detail = s.items.map(it=>`${esc(it.name)} x${it.qty}`).join(', ');
+    const chips = [];
+    if(s.payment==='transfer') chips.push('💳 Transferencia');
+    if(s.isDelivery) chips.push('🛵 Domicilio');
+    html += `<div class="list-item">
+      <div class="thumb">🧾</div>
+      <div class="li-body"><div class="li-title">${detail}</div><div class="li-sub">${new Date(s.date).toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'})}${chips.length?' · '+chips.join(' · '):''}</div></div>
+      <div class="li-right"><div class="li-price mono">${fmt(s.total)}</div>${fmtUsdLine(s.total)}</div>
+    </div>`;
+  });
+  html += `</div>`;
+  return html;
+}
+
+/* =========================================================
+   CAJA (conteo de efectivo + conversor de moneda)
+   ========================================================= */
+function viewCash(){
+  const denoms = DB.settings.cashDenoms;
+  let html = `<div class="section-title">Conversor de moneda</div>
+  <div class="card">
+    ${DB.settings.usdRate>0? `<div class="small muted mb-2">1 USD = ${DB.settings.usdRate} ${DB.meta.currency} <span class="chip" style="margin-left:6px">${DB.settings.usdRateUpdated?('act. '+DB.settings.usdRateUpdated):''}</span></div>`
+      : `<div class="small mb-2" style="color:var(--danger)">Configura la tasa del dólar en Ajustes para usar el conversor.</div>`}
+    <div class="field-row">
+      <div class="field"><label>Dólares (USD)</label><input type="number" step="0.01" id="convUsd" placeholder="0" oninput="convFromUsd()"></div>
+      <div class="field"><label>${esc(DB.meta.currency)} (CUP)</label><input type="number" step="0.01" id="convCup" placeholder="0" oninput="convFromCup()"></div>
+    </div>
+  </div>
+
+  <div class="section-title">Conteo de efectivo</div>
+  <div class="card"><div class="small muted mb-2">Cuenta cuántos billetes/monedas tienes de cada denominación. Puedes editarlas en Ajustes.</div>`;
+  html += `<div id="denomList">`;
+  denoms.forEach(d=>{
+    html += `<div class="denom-row">
+      <div><div class="denom-label mono">${fmt(d)}</div></div>
+      <input type="number" min="0" class="denom-input" id="denom_${d}" value="0" oninput="calcCash()">
+    </div>`;
+  });
+  html += `</div></div>
+  <div class="card">
+    <div class="row"><span style="font-weight:800">Total contado</span><span class="mono" id="cashTotal" style="font-weight:800;font-size:18px">${fmt(0)}</span></div>
+  </div>
+  <button class="btn btn-primary btn-block" onclick="saveCashCount()">Guardar conteo</button>`;
+
+  if(DB.cashCounts.length){
+    html += `<div class="section-title">Historial de conteos</div><div class="card">`;
+    DB.cashCounts.slice().reverse().slice(0,10).forEach(c=>{
+      html += `<div class="list-item" style="cursor:pointer" onclick="openCashCountDetail('${c.id}')"><div class="thumb">💵</div>
+        <div class="li-body"><div class="li-title">${c.date}</div></div>
+        <div class="li-right"><div class="li-price mono">${fmt(c.total)}</div></div></div>`;
+    });
+    html += `</div>`;
+  }
+  return html;
+}
+function openCashCountDetail(id){
+  const c = DB.cashCounts.find(c=>c.id===id);
+  if(!c) return;
+  const denoms = c.denoms || {};
+  const rows = Object.keys(denoms).map(Number).sort((a,b)=>b-a)
+    .filter(d=>denoms[d]>0)
+    .map(d=>`<div class="row" style="padding:4px 0"><span class="small">${fmt(d)} x${denoms[d]}</span><span class="mono small">${fmt(d*denoms[d])}</span></div>`)
+    .join('') || `<div class="small muted">Sin billetes/monedas contados</div>`;
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Conteo del ${c.date}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="card">${rows}
+      <hr class="sep">
+      <div class="row"><span style="font-weight:800">Total</span><span class="mono" style="font-weight:800">${fmt(c.total)}</span></div>
+    </div>
+    <button class="btn btn-outline btn-block" onclick="ui.closeSheet()">Cerrar</button>
+  `);
+}
+function convFromUsd(){
+  const rate = DB.settings.usdRate||0;
+  const usd = parseFloat(document.getElementById('convUsd').value)||0;
+  document.getElementById('convCup').value = rate? (usd*rate).toFixed(2) : '';
+}
+function convFromCup(){
+  const rate = DB.settings.usdRate||0;
+  const cup = parseFloat(document.getElementById('convCup').value)||0;
+  document.getElementById('convUsd').value = rate? (cup/rate).toFixed(2) : '';
+}
+function calcCash(){
+  let total=0;
+  DB.settings.cashDenoms.forEach(d=>{
+    const el = document.getElementById('denom_'+d);
+    const n = el? (parseInt(el.value)||0) : 0;
+    total += n*d;
+  });
+  document.getElementById('cashTotal').textContent = fmt(total);
+  return total;
+}
+function saveCashCount(){
+  const denoms={};
+  DB.settings.cashDenoms.forEach(d=>{ denoms[d] = parseInt(document.getElementById('denom_'+d).value)||0; });
+  const total = calcCash();
+  DB.cashCounts.push({id:uid(), date:nowStamp(), denoms, total});
+  save(); toast('Conteo guardado'); renderView();
+}
+
+/* =========================================================
+   GASTOS Y FINANZAS
+   ========================================================= */
+function viewExpenses(){
+  const period = app._expPeriod || 'mes';
+  const {from} = periodRange(period);
+  const salesP = DB.sales.filter(s=> new Date(s.date) >= from);
+  const expP = DB.expenses.filter(e=> new Date(e.date) >= from);
+  const lossesP = (DB.losses||[]).filter(l=> new Date(l.date) >= from);
+  const revenue = salesP.reduce((a,s)=>a+s.total,0);
+  const cogs = salesP.reduce((a,s)=> a + s.items.reduce((b,it)=>{
+    const p = DB.products.find(p=>p.id===it.productId);
+    return b + (p? p.costPrice*it.qty : 0);
+  },0),0);
+  const totalExp = expP.reduce((a,e)=>a+e.amount,0);
+  const totalLosses = lossesP.reduce((a,l)=>a+l.costImpact,0);
+  const profit = revenue - cogs - totalExp - totalLosses;
+
+  let html = `<div class="tabbar">
+    ${['hoy','semana','mes','todo'].map(p=>`<div class="tab-pill ${period===p?'active':''}" onclick="app._expPeriod='${p}';renderView()">${p[0].toUpperCase()+p.slice(1)}</div>`).join('')}
+  </div>
+  <div class="stat-grid">
+    <div class="stat-card"><div class="stat-val mono">${fmt(revenue)}</div><div class="stat-lbl">Ventas</div></div>
+    <div class="stat-card"><div class="stat-val mono">${fmt(cogs)}</div><div class="stat-lbl">Costo de mercancía</div></div>
+    <div class="stat-card"><div class="stat-val mono">${fmt(totalExp)}</div><div class="stat-lbl">Gastos</div></div>
+    <div class="stat-card"><div class="stat-val mono" style="color:var(--danger)">${fmt(totalLosses)}</div><div class="stat-lbl">Pérdidas de productos</div></div>
+    <div class="stat-card" style="grid-column:1/3;border-color:${profit>=0?'#B9DEC1':'#E9BBB6'}"><div class="stat-val mono" style="color:${profit>=0?'var(--ok)':'var(--danger)'}">${fmt(profit)}</div><div class="stat-lbl">${profit>=0?'Utilidad neta':'Pérdida'}</div></div>
+  </div>
+  <div class="section-title">Gastos registrados</div>`;
+
+  if(!DB.expenses.length){
+    html += `<div class="empty"><div class="eic">💸</div><div class="et">Sin gastos registrados</div><div class="ed">Toca + para agregar uno.</div></div>`;
+  } else {
+    html += `<div class="card">`;
+    DB.expenses.slice().reverse().forEach(e=>{
+      html += `<div class="list-item">
+        <div class="thumb">💸</div>
+        <div class="li-body"><div class="li-title">${esc(e.concept)}</div><div class="li-sub">${e.date}${e.category?' · '+esc(e.category):''}</div></div>
+        <div class="li-right"><div class="li-price mono" style="color:var(--danger)">-${fmt(e.amount)}</div></div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  return html;
+}
+function periodRange(period){
+  const now = new Date();
+  let from = new Date(0);
+  if(period==='hoy'){ from = new Date(now.toDateString()); }
+  else if(period==='semana'){ from = new Date(now); from.setDate(now.getDate()-7); }
+  else if(period==='mes'){ from = new Date(now); from.setMonth(now.getMonth()-1); }
+  return {from};
+}
+function openExpenseForm(){
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Nuevo gasto</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="field"><label>Concepto</label><input type="text" id="efConcept" placeholder="Ej. Renta, luz, transporte"></div>
+    <div class="field-row">
+      <div class="field"><label>Monto</label><input type="number" step="0.01" id="efAmount"></div>
+      <div class="field"><label>Fecha</label><input type="date" id="efDate" value="${todayISO()}"></div>
+    </div>
+    <div class="field"><label>Categoría (opcional)</label><input type="text" id="efCategory" placeholder="Ej. Operativo"></div>
+    <button class="btn btn-primary btn-block" onclick="saveExpense()">Guardar gasto</button>
+  `);
+}
+function saveExpense(){
+  const concept = document.getElementById('efConcept').value.trim();
+  const amount = parseFloat(document.getElementById('efAmount').value)||0;
+  if(!concept || amount<=0) return toast('Completa concepto y monto');
+  DB.expenses.push({id:uid(), concept, amount, date:document.getElementById('efDate').value||todayISO(), category:document.getElementById('efCategory').value.trim()});
+  save(); ui.closeSheet(); toast('Gasto registrado'); renderView();
+}
+
+/* =========================================================
+   REPORTES
+   ========================================================= */
+function viewReports(){
+  const salesByProduct = {};
+  DB.sales.forEach(s=>s.items.forEach(it=>{
+    salesByProduct[it.productId] = (salesByProduct[it.productId]||0) + it.qty;
+  }));
+  const withSales = activeProducts().map(p=>({p, qty:salesByProduct[p.id]||0}));
+  const best = withSales.slice().sort((a,b)=>b.qty-a.qty).slice(0,8);
+  const worst = withSales.slice().sort((a,b)=>a.qty-b.qty).slice(0,8);
+  const margin = activeProducts().map(p=>{
+    const price = p.prices[0]?p.prices[0].price:0;
+    return {p, margin: price - p.costPrice};
+  }).sort((a,b)=>a.margin-b.margin).slice(0,8);
+
+  function block(title, arr, valueFn){
+    if(!arr.length) return `<div class="section-title">${title}</div><div class="empty" style="padding:20px"><div class="ed">Sin datos suficientes</div></div>`;
+    return `<div class="section-title">${title}</div><div class="card">` +
+      arr.map(x=>`<div class="list-item">${thumbHtml(x.p)}
+        <div class="li-body"><div class="li-title">${esc(x.p.name)}</div></div>
+        <div class="li-right"><div class="li-price mono">${valueFn(x)}</div></div></div>`).join('') + `</div>`;
+  }
+  return block('🏆 Más vendidos', best, x=>x.qty+' und.')
+    + block('📉 Menos vendidos', worst, x=>x.qty+' und.')
+    + block('⚠️ Menor margen de ganancia', margin, x=>fmt(x.margin));
+}
+
+/* =========================================================
+   CALENDARIO Y NOTAS
+   ========================================================= */
+function viewCalendar(){
+  const st = app._cal || (app._cal = {y:new Date().getFullYear(), m:new Date().getMonth(), sel:todayISO()});
+  const first = new Date(st.y, st.m, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(st.y, st.m+1, 0).getDate();
+  const monthName = first.toLocaleDateString('es-MX',{month:'long',year:'numeric'});
+  const todayStr = todayISO();
+
+  let cells = '';
+  const dows = ['D','L','M','X','J','V','S'];
+  dows.forEach(d=> cells += `<div class="cal-dow">${d}</div>`);
+  for(let i=0;i<startDow;i++) cells += `<div></div>`;
+  for(let d=1; d<=daysInMonth; d++){
+    const dateStr = `${st.y}-${String(st.m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const hasItems = DB.events.some(e=>e.date===dateStr) || DB.notes.some(n=>n.date===dateStr);
+    cells += `<div class="cal-cell inmonth ${dateStr===todayStr?'today':''} ${dateStr===st.sel?'sel':''}" onclick="app._cal.sel='${dateStr}';renderView()">${d}${hasItems?'<span class="cal-dot"></span>':''}</div>`;
+  }
+
+  const dayEvents = DB.events.filter(e=>e.date===st.sel);
+  const dayNotes = DB.notes.filter(n=>n.date===st.sel);
+
+  return `<div class="card">
+    <div class="row">
+      <button class="icon-btn" style="background:var(--surface-2);color:var(--ink)" onclick="app._cal.m--; if(app._cal.m<0){app._cal.m=11;app._cal.y--;} renderView()">‹</button>
+      <b style="text-transform:capitalize">${monthName}</b>
+      <button class="icon-btn" style="background:var(--surface-2);color:var(--ink)" onclick="app._cal.m++; if(app._cal.m>11){app._cal.m=0;app._cal.y++;} renderView()">›</button>
+    </div>
+    <div class="calendar-grid mt-3">${cells}</div>
+  </div>
+  <div class="section-title">${st.sel}</div>
+  <div class="card">
+    ${dayEvents.map(e=>`<div class="row" style="padding:6px 0"><span>📌 ${esc(e.title)}</span><button class="btn btn-sm btn-danger" onclick="removeEvent('${e.id}')">✕</button></div>`).join('')}
+    ${dayNotes.map(n=>`<div class="row" style="padding:6px 0;align-items:flex-start"><span class="small">📝 ${esc(n.text)}</span><button class="btn btn-sm btn-danger" onclick="removeNote('${n.id}')">✕</button></div>`).join('')}
+    ${(!dayEvents.length && !dayNotes.length)?'<div class="small muted">Sin eventos ni notas para este día.</div>':''}
+  </div>
+  <div class="gap-2">
+    <button class="btn btn-outline btn-block" onclick="openEventForm()">+ Evento</button>
+    <button class="btn btn-ghost btn-block" onclick="openNoteForm()">+ Nota</button>
+  </div>`;
+}
+function openEventForm(){
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Nuevo evento</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="field"><label>Título</label><input type="text" id="evTitle" placeholder="Ej. Entrega de pedido"></div>
+    <button class="btn btn-primary btn-block" onclick="saveEvent()">Guardar</button>
+  `);
+}
+function saveEvent(){
+  const title = document.getElementById('evTitle').value.trim();
+  if(!title) return toast('Escribe un título');
+  DB.events.push({id:uid(), date:app._cal.sel, title});
+  save(); ui.closeSheet(); renderView();
+}
+function removeEvent(id){ DB.events = DB.events.filter(e=>e.id!==id); save(); renderView(); }
+function openNoteForm(){
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Nueva nota</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="field"><label>Nota</label><textarea id="noteText" rows="3" placeholder="Escribe tu nota..."></textarea></div>
+    <button class="btn btn-primary btn-block" onclick="saveNote()">Guardar</button>
+  `);
+}
+function saveNote(){
+  const text = document.getElementById('noteText').value.trim();
+  if(!text) return toast('Escribe algo');
+  DB.notes.push({id:uid(), date:app._cal.sel, text});
+  save(); ui.closeSheet(); renderView();
+}
+function removeNote(id){ DB.notes = DB.notes.filter(n=>n.id!==id); save(); renderView(); }
+
+/* =========================================================
+   RECORDATORIOS
+   ========================================================= */
+function viewReminders(){
+  const list = (DB.reminders||[]).slice().sort((a,b)=> (a.date+((a.time||'00:00'))).localeCompare(b.date+(b.time||'00:00')));
+  const nowStr = new Date().toISOString().slice(0,16).replace('T',' ');
+  let html = '';
+  if(!('Notification' in window)){
+    html += `<div class="card small muted">Este navegador no admite notificaciones. Los recordatorios igual se guardan y se muestran aquí y en Inicio.</div>`;
+  } else if(Notification.permission!=='granted'){
+    html += `<div class="card">
+      <div class="small" style="margin-bottom:8px">Para que te avise mientras tienes la app abierta, activa las notificaciones.</div>
+      <button class="btn btn-outline btn-block" onclick="requestNotifPermission()">🔔 Activar notificaciones</button>
+      <div class="small muted mt-2">Aviso: solo funciona mientras la app está abierta en el teléfono — los navegadores no permiten que una página web despierte al teléfono estando cerrada. Para no perderte nada importante, revisa esta sección o la de Inicio.</div>
+    </div>`;
+  }
+  if(!list.length){
+    html += `<div class="empty"><div class="eic">⏰</div><div class="et">Sin recordatorios</div><div class="ed">Toca + para crear uno.</div></div>`;
+    return html;
+  }
+  html += `<div class="card">`;
+  list.forEach(r=>{
+    const due = (r.date+' '+(r.time||'00:00')) <= nowStr;
+    html += `<div class="list-item">
+      <div class="thumb">${r.done?'✅':(due?'⏰':'🔔')}</div>
+      <div class="li-body">
+        <div class="li-title" style="${r.done?'text-decoration:line-through;opacity:.5':''}">${esc(r.title)}</div>
+        <div class="li-sub">${r.date}${r.time?' · '+r.time:''} ${(!r.done && due)?'<span class="chip warn">pendiente</span>':''}</div>
+      </div>
+      <div class="gap-2">
+        ${!r.done?`<button class="btn btn-ghost btn-sm" onclick="toggleReminder('${r.id}')">Hecho</button>`:''}
+        <button class="btn btn-danger btn-sm" onclick="removeReminder('${r.id}')">✕</button>
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+  return html;
+}
+function requestNotifPermission(){
+  if(!('Notification' in window)) return;
+  Notification.requestPermission().then(perm=>{
+    DB.settings.notifEnabled = (perm==='granted');
+    save();
+    renderView();
+  });
+}
+function openReminderForm(){
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Nuevo recordatorio</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="field"><label>¿Qué tienes que hacer?</label><input type="text" id="rmTitle" placeholder="Ej. Ir al banco, comprar hielo..."></div>
+    <div class="field-row">
+      <div class="field"><label>Fecha</label><input type="date" id="rmDate" value="${todayISO()}"></div>
+      <div class="field"><label>Hora</label><input type="time" id="rmTime" value="09:00"></div>
+    </div>
+    <button class="btn btn-primary btn-block" onclick="saveReminder()">Guardar recordatorio</button>
+  `);
+}
+function saveReminder(){
+  const title = document.getElementById('rmTitle').value.trim();
+  if(!title) return toast('Escribe qué tienes que hacer');
+  DB.reminders.push({id:uid(), title, date:document.getElementById('rmDate').value||todayISO(), time:document.getElementById('rmTime').value||'', done:false, notified:false});
+  save(); ui.closeSheet(); toast('Recordatorio guardado'); renderView();
+}
+function toggleReminder(id){
+  const r = DB.reminders.find(r=>r.id===id);
+  if(r) r.done = true;
+  save(); renderView();
+}
+function removeReminder(id){
+  DB.reminders = DB.reminders.filter(r=>r.id!==id);
+  save(); renderView();
+}
+function checkDueReminders(){
+  if(!('Notification' in window) || Notification.permission!=='granted') return;
+  const nowStr = new Date().toISOString().slice(0,16).replace('T',' ');
+  let changed = false;
+  (DB.reminders||[]).forEach(r=>{
+    if(!r.done && !r.notified && (r.date+' '+(r.time||'00:00')) <= nowStr){
+      try{ new Notification('⏰ '+r.title, {body:'Recordatorio de AlmacénPro', tag:r.id}); }catch(e){}
+      r.notified = true; changed = true;
+    }
+  });
+  if(changed) save();
+}
+setInterval(checkDueReminders, 60000);
+
+/* =========================================================
+   PÉRDIDAS DE PRODUCTOS (mermas, daños, robos, vencidos)
+   ========================================================= */
+const LOSS_REASONS = ['Dañado','Vencido','Robado/perdido','Otro'];
+function viewLosses(){
+  const period = app._lossPeriod || 'mes';
+  const {from} = periodRange(period);
+  const lossesP = (DB.losses||[]).filter(l=> new Date(l.date) >= from);
+  const totalCost = lossesP.reduce((a,l)=>a+l.costImpact,0);
+  const totalUnits = lossesP.reduce((a,l)=>a+l.qty,0);
+
+  let html = `<div class="tabbar">
+    ${['hoy','semana','mes','todo'].map(p=>`<div class="tab-pill ${period===p?'active':''}" onclick="app._lossPeriod='${p}';renderView()">${p[0].toUpperCase()+p.slice(1)}</div>`).join('')}
+  </div>
+  <div class="stat-grid">
+    <div class="stat-card"><div class="stat-val mono">${totalUnits}</div><div class="stat-lbl">Unidades perdidas</div></div>
+    <div class="stat-card"><div class="stat-val mono" style="color:var(--danger)">${fmt(totalCost)}</div><div class="stat-lbl">Costo de la pérdida</div></div>
+  </div>`;
+
+  if(!lossesP.length){
+    html += `<div class="empty"><div class="eic">📉</div><div class="et">Sin pérdidas registradas</div><div class="ed">Toca + cuando se dañe, venza o falte un producto.</div></div>`;
+  } else {
+    html += `<div class="card">`;
+    lossesP.slice().reverse().forEach(l=>{
+      const p = DB.products.find(p=>p.id===l.productId);
+      html += `<div class="list-item">
+        <div class="thumb">📉</div>
+        <div class="li-body"><div class="li-title">${esc(p?p.name:'Producto')}</div><div class="li-sub">${l.reason} · ${l.date} · ${l.qty} unidad(es)</div></div>
+        <div class="li-right"><div class="li-price mono" style="color:var(--danger)">-${fmt(l.costImpact)}</div></div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  return html;
+}
+function openLossForm(){
+  window._lossSelectedProduct = null;
+  window._lossContext = {catId:null, subId:null, q:''};
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Registrar pérdida</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <label>Producto</label>
+    <div id="lossSelectedBox" class="mt-2"></div>
+    <div id="lossPicker" class="mt-2"></div>
+    <div class="field-row mt-2">
+      <div class="field"><label>Cantidad perdida</label><input type="number" id="lossQty" value="1"></div>
+      <div class="field"><label>Motivo</label>
+        <select id="lossReason">${LOSS_REASONS.map(r=>`<option value="${r}">${r}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="field"><label>Fecha</label><input type="date" id="lossDate" value="${todayISO()}"></div>
+    <button class="btn btn-primary btn-block" onclick="saveLoss()">Guardar pérdida</button>
+  `);
+  renderLossPicker();
+}
+function renderLossPicker(){
+  const wrap = document.getElementById('lossPicker');
+  if(!wrap) return;
+  const ctx = window._lossContext;
+  let html = categoryTabsHTML(ctx, 'window._lossContext', 'renderLossPicker');
+  html += `<div class="searchbar" style="margin-bottom:8px">
+    <span class="sic">🔎</span>
+    <input type="text" placeholder="Buscar producto..." value="${esc(ctx.q)}" oninput="window._lossContext.q=this.value; renderLossPicker()">
+  </div>`;
+  const list = filterProductsByCtx(activeProducts(), ctx);
+  html += `<div class="card" style="max-height:220px;overflow-y:auto;padding:6px 12px">`;
+  if(!list.length){
+    html += `<div class="small muted" style="padding:8px 0">Sin resultados</div>`;
+  } else {
+    html += list.map(p=>`
+      <div class="list-item" style="cursor:pointer" onclick="selectLossProduct('${p.id}')">
+        ${thumbHtml(p)}
+        <div class="li-body"><div class="li-title">${esc(p.name)}</div><div class="li-sub">${p.stock} en stock</div></div>
+      </div>`).join('');
+  }
+  html += `</div>`;
+  wrap.innerHTML = html;
+}
+function selectLossProduct(pid){
+  const p = DB.products.find(p=>p.id===pid);
+  if(!p) return;
+  window._lossSelectedProduct = p;
+  document.getElementById('lossSelectedBox').innerHTML = `
+    <div class="list-item" style="background:var(--surface-2);border-radius:10px;padding:8px 10px">
+      ${thumbHtml(p)}
+      <div class="li-body"><div class="li-title">${esc(p.name)}</div><div class="li-sub">${p.stock} en stock</div></div>
+      <button class="btn btn-danger btn-sm" onclick="window._lossSelectedProduct=null;document.getElementById('lossSelectedBox').innerHTML=''">✕</button>
+    </div>`;
+}
+function saveLoss(){
+  const p = window._lossSelectedProduct;
+  const qty = parseFloat(document.getElementById('lossQty').value)||0;
+  const reason = document.getElementById('lossReason').value;
+  const date = document.getElementById('lossDate').value || todayISO();
+  if(!p || qty<=0) return toast('Selecciona un producto y una cantidad');
+  const costImpact = qty * (p.costPrice||0);
+  DB.losses.push({id:uid(), productId:p.id, qty, reason, date, costImpact, createdAt:new Date().toISOString()});
+  DB.stockAdjustments.push({id:uid(), productId:p.id, delta:-qty, reason:'Pérdida: '+reason, ts:new Date().toISOString()});
+  recomputeStock();
+  save();
+  ui.closeSheet();
+  toast('Pérdida registrada');
+  renderView();
+}
+
+
+
+/* =========================================================
+   AJUSTES
+   ========================================================= */
+function viewSettings(){
+  const isAdmin = app.role==='admin';
+  let html = `<div class="section-title">Negocio</div>
+  <div class="card">
+    <div class="field"><label>Nombre del negocio</label><input type="text" id="setBizName" value="${esc(DB.meta.bizName)}" ${isAdmin?'':'disabled'} onchange="DB.meta.bizName=this.value;save();applySettings()"></div>
+    <div class="field" style="margin-bottom:0"><label>Símbolo de moneda</label><input type="text" id="setCurrency" value="${esc(DB.meta.currency)}" maxlength="4" ${isAdmin?'':'disabled'} onchange="DB.meta.currency=this.value||'$';save();renderView()"></div>
+  </div>`;
+
+  if(isAdmin){
+    html += `<div class="section-title">Ventas</div>
+    <div class="card">
+      <div class="field" style="margin-bottom:0"><label>Recargo por pago con transferencia (%)</label><input type="number" step="0.1" id="setTransferPct" value="${DB.settings.transferSurchargePct||0}" onchange="DB.settings.transferSurchargePct=parseFloat(this.value)||0;save()"></div>
+      <div class="small muted mt-2">Se usa como valor por defecto al elegir "Transferencia" en una venta, pero se puede ajustar en cada venta. Déjalo en 0 si no aplicas recargo por defecto.</div>
+    </div>
+
+    <div class="section-title">Tasa de cambio (USD ↔ ${esc(DB.meta.currency)})</div>
+    <div class="card">
+      <div class="field"><label>1 USD equivale a</label><input type="number" step="0.01" id="setUsdRate" value="${DB.settings.usdRate||''}" placeholder="Ej. 400" onchange="DB.settings.usdRate=parseFloat(this.value)||0;DB.settings.usdRateUpdated='manual · '+todayISO();save()"></div>
+      <div class="small muted mt-2" id="usdRateStatus">${DB.settings.usdRateUpdated? 'Última actualización: '+esc(DB.settings.usdRateUpdated) : 'Aún no configurada'}</div>
+      <hr class="sep">
+      <label>Actualizar automáticamente (elTOQUE)</label>
+      <div class="small muted mt-2" style="margin-bottom:8px">
+        elTOQUE requiere una clave de API gratuita y personal. Solicítala en <span style="text-decoration:underline">tasas.eltoque.com/docs</span> y pégala aquí. Si el navegador bloquea la conexión, actualiza el número manualmente arriba con el valor que veas en eltoque.com.
+      </div>
+      <input type="text" id="setEltoqueKey" value="${esc(DB.settings.eltoqueApiKey||'')}" placeholder="Clave de API de elTOQUE (opcional)" onchange="DB.settings.eltoqueApiKey=this.value.trim();save()">
+      <button class="btn btn-outline btn-block mt-2" onclick="fetchEltoqueRate()">🔄 Actualizar tasa desde elTOQUE</button>
+    </div>
+
+    <div class="section-title">Inventario</div>
+    <div class="card">
+      <div class="field" style="margin-bottom:0"><label>Avisar stock bajo cuando queden menos de...</label><input type="number" id="setDefaultMinStock" value="${DB.settings.defaultMinStock}" onchange="DB.settings.defaultMinStock=parseInt(this.value)||1;save()"></div>
+      <div class="small muted mt-2">Se usa como valor inicial al crear un producto nuevo. Cada producto lo puedes ajustar aparte si necesita un número distinto.</div>
+    </div>
+
+    <div class="section-title">Botones rápidos de cantidad (en Compras)</div>
+    <div class="card">
+      <div id="qtyStepsEditList" class="stack"></div>
+      <div class="gap-2 mt-2">
+        <input type="number" id="newQtyStepVal" placeholder="Nuevo salto (ej. 24)" style="flex:1">
+        <button class="btn btn-ghost btn-sm" onclick="addQtyStep()">+ Agregar</button>
+      </div>
+    </div>
+
+    <div class="section-title">Denominaciones de efectivo</div>
+    <div class="card">
+      <div id="denomEditList" class="stack"></div>
+      <div class="gap-2 mt-2">
+        <input type="number" step="0.01" id="newDenomVal" placeholder="Nueva denominación" style="flex:1">
+        <button class="btn btn-ghost btn-sm" onclick="addDenom()">+ Agregar</button>
+      </div>
+    </div>`;
+  }
+
+  html += `<div class="section-title">Tamaño de letra</div>
+  <div class="card"><div class="gap-2">
+    ${[{k:0.9,l:'A'},{k:1,l:'A'},{k:1.15,l:'A'},{k:1.3,l:'A'}].map((o,i)=>`
+      <button class="btn ${DB.settings.fontScale==o.k?'btn-primary':'btn-outline'} btn-block" style="font-size:${13+i*3}px" onclick="DB.settings.fontScale=${o.k};save();applySettings();renderView()">${o.l}</button>`).join('')}
+  </div></div>
+
+  <div class="section-title">Color de la interfaz</div>
+  <div class="card"><div class="swatch-row">
+    ${Object.keys(THEMES).map(k=>`<div class="swatch ${DB.settings.theme===k?'sel':''}" style="background:${THEMES[k].primary}" onclick="DB.settings.theme='${k}';save();applySettings();renderView()"></div>`).join('')}
+  </div></div>`;
+
+  if(isAdmin){ setTimeout(renderDenomEditList, 0); setTimeout(renderQtyStepsEditList, 0); }
+
+  if(isAdmin){
+    html += `<div class="section-title">Sincronizar con otro teléfono</div>
+    <div class="card">
+      <div class="small muted" style="margin-bottom:10px">Para trabajar offline en dos teléfonos sin perder información: cada quien exporta sus cambios y se los manda al otro (por WhatsApp, Bluetooth, etc). Al "Sincronizar", la app combina ambos historiales — nunca borra ni pisa lo que el otro registró.</div>
+      <button class="btn btn-accent btn-block" onclick="exportSyncFile()">📤 Exportar mis cambios</button>
+      <button class="btn btn-primary btn-block mt-2" onclick="document.getElementById('syncInputHidden').click()">📥 Sincronizar (archivo recibido)</button>
+      <div class="small muted mt-2" id="lastSyncInfo">${DB.lastSyncAt? 'Última sincronización: '+esc(DB.lastSyncAt) : ''}</div>
+    </div>
+
+    <div class="section-title">Copia de seguridad</div>
+    <div class="card stack">
+      <div class="small muted" style="margin-bottom:2px">Esto reemplaza TODOS los datos de este teléfono (úsalo solo para restaurar tu propio respaldo, no para juntar datos de dos personas).</div>
+      <button class="btn btn-outline btn-block" onclick="document.getElementById('restoreInputHidden').click()">⬆️ Restaurar copia completa (reemplaza todo)</button>
+      <button class="btn btn-danger btn-block" onclick="resetApp()">🗑️ Restablecer aplicación</button>
+    </div>`;
+  }
+  html += `<div class="small muted" style="text-align:center;margin-top:18px">AlmacénPro · datos guardados solo en este dispositivo</div>`;
+  return html;
+}
+function renderDenomEditList(){
+  const wrap = document.getElementById('denomEditList');
+  if(!wrap) return;
+  wrap.innerHTML = DB.settings.cashDenoms.map((d,i)=>`
+    <div class="row"><span class="mono">${fmt(d)}</span><button class="btn btn-danger btn-sm" onclick="removeDenom(${i})">✕</button></div>
+  `).join('') || `<div class="small muted">Sin denominaciones. Agrega una abajo.</div>`;
+}
+function addDenom(){
+  const val = parseFloat(document.getElementById('newDenomVal').value);
+  if(!val || val<=0) return toast('Escribe un valor válido');
+  if(DB.settings.cashDenoms.includes(val)) return toast('Esa denominación ya existe');
+  DB.settings.cashDenoms.push(val);
+  DB.settings.cashDenoms.sort((a,b)=>b-a);
+  save(); document.getElementById('newDenomVal').value=''; renderDenomEditList();
+}
+function removeDenom(i){
+  DB.settings.cashDenoms.splice(i,1);
+  save(); renderDenomEditList();
+}
+function renderQtyStepsEditList(){
+  const wrap = document.getElementById('qtyStepsEditList');
+  if(!wrap) return;
+  wrap.innerHTML = DB.settings.qtySteps.map((n,i)=>`
+    <div class="row"><span class="mono">+${n}</span><button class="btn btn-danger btn-sm" onclick="removeQtyStep(${i})">✕</button></div>
+  `).join('') || `<div class="small muted">Sin botones rápidos. Agrega uno abajo.</div>`;
+}
+function addQtyStep(){
+  const val = parseInt(document.getElementById('newQtyStepVal').value);
+  if(!val || val<=0) return toast('Escribe un número válido');
+  if(DB.settings.qtySteps.includes(val)) return toast('Ese salto ya existe');
+  DB.settings.qtySteps.push(val);
+  DB.settings.qtySteps.sort((a,b)=>a-b);
+  save(); document.getElementById('newQtyStepVal').value=''; renderQtyStepsEditList();
+}
+function removeQtyStep(i){
+  DB.settings.qtySteps.splice(i,1);
+  save(); renderQtyStepsEditList();
+}
+async function fetchEltoqueRate(){
+  const key = (DB.settings.eltoqueApiKey||'').trim();
+  if(!key){ toast('Ingresa tu clave de API de elTOQUE primero'); return; }
+  toast('Consultando elTOQUE...');
+  try{
+    const res = await fetch('https://tasas.eltoque.com/v1/trmi', {
+      headers: { 'Authorization': 'Bearer '+key }
+    });
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    const usd = data && data.tasas && data.tasas.USD;
+    if(!usd) throw new Error('Formato inesperado');
+    DB.settings.usdRate = usd;
+    DB.settings.usdRateUpdated = 'elTOQUE · '+todayISO();
+    save();
+    toast('Tasa actualizada: 1 USD = '+usd+' '+DB.meta.currency);
+    renderView();
+  }catch(err){
+    toast('No se pudo conectar. Actualiza el valor manualmente.');
+  }
+}
+
+async function exportSyncFile(){
+  const filename = `almacenpro_${DB.deviceId||'dispositivo'}_${Date.now()}.json`;
+  const content = JSON.stringify(DB,null,2);
+  const blob = new Blob([content], {type:'application/json'});
+  if(navigator.share && navigator.canShare){
+    try{
+      const file = new File([blob], filename, {type:'application/json'});
+      if(navigator.canShare({files:[file]})){
+        await navigator.share({files:[file], title:'AlmacénPro · sincronización', text:'Archivo de sincronización de AlmacénPro'});
+        return;
+      }
+    }catch(err){ /* cancelado o no soportado: seguimos con la descarga normal */ }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('Archivo exportado. Envíalo por WhatsApp o Bluetooth desde tus Descargas.');
+}
+function backupData(){
+  const blob = new Blob([JSON.stringify(DB,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `almacenpro_${DB.deviceId||'dispositivo'}_${Date.now()}.json`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('Archivo exportado');
+}
+document.getElementById('syncInputHidden').addEventListener('change', function(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev){
+    try{
+      const remote = JSON.parse(ev.target.result);
+      openSyncReview(remote);
+    }catch(err){ toast('Archivo inválido'); }
+  };
+  reader.readAsText(file);
+  e.target.value='';
+});
+
+function mergeById(localArr, remoteArr){
+  const map = {};
+  (localArr||[]).forEach(x=> map[x.id]=x);
+  let added=0;
+  (remoteArr||[]).forEach(x=>{ if(!map[x.id]){ map[x.id]=x; added++; } });
+  return {merged:Object.values(map), added};
+}
+
+/* ---------- Detección de casos que sí necesitan que el usuario decida ---------- */
+function detectDeleteConflicts(localProducts, remoteProducts){
+  const lMap = {}; localProducts.forEach(p=>lMap[p.id]=p);
+  const rMap = {}; (remoteProducts||[]).forEach(p=>rMap[p.id]=p);
+  const conflicts = [];
+  Object.keys(lMap).forEach(id=>{
+    const lp = lMap[id], rp = rMap[id];
+    if(!rp) return;
+    const lDel = !!lp.deletedAt, rDel = !!rp.deletedAt;
+    if(lDel !== rDel){
+      conflicts.push({type:'delete', productId:id, name:(lDel?lp.name:rp.name)||'(sin nombre)'});
+    }
+  });
+  return conflicts;
+}
+function detectStockDupConflicts(localAdj, remoteAdj){
+  const conflicts = [];
+  const localIds = new Set((localAdj||[]).map(a=>a.id));
+  const localManual = (localAdj||[]).filter(a=>a.reason==='Ajuste manual');
+  const remoteNewManual = (remoteAdj||[]).filter(a=> a.reason==='Ajuste manual' && !localIds.has(a.id));
+  remoteNewManual.forEach(ra=>{
+    const match = localManual.find(la=> la.productId===ra.productId && Math.abs(new Date(la.ts)-new Date(ra.ts)) < 48*3600*1000);
+    if(match){
+      conflicts.push({type:'stockdup', productId:ra.productId, localAdjId:match.id, remoteAdjId:ra.id, localDelta:match.delta, remoteDelta:ra.delta});
+    }
+  });
+  return conflicts;
+}
+function conflictKey(c){
+  if(c.type==='stockdup') return c.type+':'+c.productId+':'+c.remoteAdjId;
+  if(c.type==='oversell') return c.type+':'+c.productId;
+  return c.type+':'+c.productId;
+}
+
+/* ---------- Sobregiro de stock: reconstruir la línea de tiempo exacta de un producto ---------- */
+function buildProductTimeline(productId, purchases, sales, adjustments){
+  const events = [];
+  (purchases||[]).forEach(pu=> (pu.items||[]).forEach(it=>{
+    if(it.productId===productId) events.push({ts:pu.createdAt||pu.date, qty:it.qty, kind:'compra', ref:pu.id});
+  }));
+  (sales||[]).forEach(s=> (s.items||[]).forEach((it,idx)=>{
+    if(it.productId===productId) events.push({ts:s.date, qty:-it.qty, kind:'venta', ref:s.id, itemIndex:idx, totalQtyInSale:it.qty});
+  }));
+  (adjustments||[]).forEach(a=>{
+    if(a.productId===productId) events.push({ts:a.ts, qty:a.delta, kind:'ajuste', ref:a.id, reason:a.reason});
+  });
+  events.sort((a,b)=> new Date(a.ts) - new Date(b.ts));
+  let bal = 0, culprit = null, balanceBeforeCulprit = 0;
+  events.forEach(e=>{
+    const before = bal;
+    bal += e.qty;
+    e.balanceAfter = bal;
+    if(bal<0 && !culprit){ culprit = e; balanceBeforeCulprit = before; }
+  });
+  return {events, finalBalance:bal, culprit, balanceBeforeCulprit};
+}
+function detectOversellConflicts(remote){
+  const purchases = mergeById(DB.purchases, remote.purchases).merged;
+  const sales = mergeById(DB.sales, remote.sales).merged;
+  const adjustments = mergeById(DB.stockAdjustments, remote.stockAdjustments).merged;
+  const productIds = new Set(DB.products.map(p=>p.id).concat((remote.products||[]).map(p=>p.id)));
+  const conflicts = [];
+  productIds.forEach(pid=>{
+    const tl = buildProductTimeline(pid, purchases, sales, adjustments);
+    if(tl.finalBalance < 0 && tl.culprit){
+      conflicts.push({
+        type:'oversell', productId:pid, deficit:-tl.finalBalance,
+        balanceBeforeCulprit: tl.balanceBeforeCulprit,
+        culprit: tl.culprit
+      });
+    }
+  });
+  return conflicts;
+}
+function fmtTime(ts){ try{ return new Date(ts).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); }catch(e){ return ts; } }
+
+function syncCounts(remote){
+  function newCount(key){ const localIds = new Set((DB[key]||[]).map(x=>x.id)); return (remote[key]||[]).filter(x=>!localIds.has(x.id)).length; }
+  const localProdIds = new Set(DB.products.map(p=>p.id));
+  return {
+    ventas:newCount('sales'), compras:newCount('purchases'), gastos:newCount('expenses'),
+    caja:newCount('cashCounts'), notas:newCount('notes'), eventos:newCount('events'),
+    recordatorios:newCount('reminders'), perdidas:newCount('losses'),
+    productos:(remote.products||[]).filter(p=>!localProdIds.has(p.id)).length
+  };
+}
+
+function openSyncReview(remote){
+  if(!remote || !remote.deviceId){ toast('Archivo de sincronización inválido'); return; }
+  if(remote.deviceId === DB.deviceId){ toast('Ese archivo es de este mismo dispositivo'); return; }
+  window._syncRemote = remote;
+  window._syncConflicts = [
+    ...detectDeleteConflicts(DB.products, remote.products||[]),
+    ...detectStockDupConflicts(DB.stockAdjustments, remote.stockAdjustments||[]),
+    ...detectOversellConflicts(remote)
+  ];
+  window._syncDecisions = {};
+  renderSyncReview();
+}
+function renderSyncReview(){
+  const remote = window._syncRemote;
+  const conflicts = window._syncConflicts;
+  const counts = syncCounts(remote);
+  const parts = [];
+  if(counts.ventas) parts.push(counts.ventas+' venta(s)');
+  if(counts.compras) parts.push(counts.compras+' compra(s)');
+  if(counts.productos) parts.push(counts.productos+' producto(s) nuevo(s)');
+  if(counts.gastos) parts.push(counts.gastos+' gasto(s)');
+  if(counts.caja) parts.push(counts.caja+' conteo(s) de caja');
+  if(counts.notas) parts.push(counts.notas+' nota(s)');
+  if(counts.eventos) parts.push(counts.eventos+' evento(s)');
+  if(counts.recordatorios) parts.push(counts.recordatorios+' recordatorio(s)');
+  if(counts.perdidas) parts.push(counts.perdidas+' pérdida(s) de producto');
+  const summaryText = parts.length? parts.join(', ')+' se combinarán automáticamente.' : 'No hay registros nuevos para combinar.';
+
+  let html = `
+    <div class="sheet-header"><div class="sheet-title">Revisar sincronización</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="card"><div class="small">✅ ${summaryText}</div></div>`;
+
+  if(conflicts.length){
+    html += `<div class="section-title">Necesita tu decisión (${conflicts.length})</div>`;
+    conflicts.forEach(c=>{
+      const key = conflictKey(c);
+      const decided = window._syncDecisions[key];
+      if(c.type==='delete'){
+        html += `<div class="card">
+          <div class="small" style="margin-bottom:10px">🗑️ <b>${esc(c.name)}</b>: está eliminado en un teléfono y activo en el otro.</div>
+          <div class="gap-2">
+            <button class="btn ${decided==='delete'?'btn-primary':'btn-outline'} btn-block btn-sm" onclick="resolveSyncConflict('${key}','delete')">Eliminar</button>
+            <button class="btn ${decided==='keep'?'btn-primary':'btn-outline'} btn-block btn-sm" onclick="resolveSyncConflict('${key}','keep')">Mantener activo</button>
+          </div>
+        </div>`;
+      } else if(c.type==='stockdup'){
+        const pName = (DB.products.find(p=>p.id===c.productId)||(remote.products||[]).find(p=>p.id===c.productId)||{}).name || 'Producto';
+        html += `<div class="card">
+          <div class="small" style="margin-bottom:10px">⚠️ <b>${esc(pName)}</b>: el stock se ajustó dos veces cerca de la misma hora (${c.localDelta>0?'+':''}${c.localDelta} y ${c.remoteDelta>0?'+':''}${c.remoteDelta}). ¿Fue la misma corrección contada dos veces?</div>
+          <div class="gap-2">
+            <button class="btn ${decided==='once'?'btn-primary':'btn-outline'} btn-block btn-sm" onclick="resolveSyncConflict('${key}','once')">Sí, aplicar solo una</button>
+            <button class="btn ${decided==='both'?'btn-primary':'btn-outline'} btn-block btn-sm" onclick="resolveSyncConflict('${key}','both')">No, son distintas</button>
+          </div>
+        </div>`;
+      } else if(c.type==='oversell'){
+        const pName = (DB.products.find(p=>p.id===c.productId)||(remote.products||[]).find(p=>p.id===c.productId)||{}).name || 'Producto';
+        const cul = c.culprit;
+        const culLabel = cul.kind==='venta' ? 'Se vendieron '+cul.totalQtyInSale+' unidades' : (cul.kind==='ajuste' ? 'Ajuste de '+cul.qty : 'Movimiento');
+        html += `<div class="card">
+          <div class="small" style="margin-bottom:8px">⚠️ <b>${esc(pName)}</b>: al combinar las ventas de los dos teléfonos, quedó en <b style="color:var(--danger)">${-c.deficit}</b> (faltan ${c.deficit} unidad${c.deficit>1?'es':''}).</div>
+          <div class="wa-preview" style="margin-bottom:10px">Antes había ${c.balanceBeforeCulprit} disponibles.
+${culLabel} a las ${fmtTime(cul.ts)} → esto deja el faltante de ${c.deficit}.</div>
+          <div class="small muted" style="margin-bottom:8px">¿Qué pasó en realidad?</div>
+          <div class="stack">
+            <button class="btn ${decided==='zero'?'btn-primary':'btn-outline'} btn-block btn-sm" onclick="resolveSyncConflict('${key}','zero')">No había más — ajustar a 0</button>
+            <button class="btn ${decided==='addstock'?'btn-primary':'btn-outline'} btn-block btn-sm" onclick="resolveSyncConflict('${key}','addstock')">Sí tenía ${c.deficit} más — se me olvidó registrarlo</button>
+            <button class="btn ${decided==='fixsale'?'btn-primary':'btn-outline'} btn-block btn-sm" onclick="resolveSyncConflict('${key}','fixsale')">Esa venta de las ${fmtTime(cul.ts)} estuvo mal — corregirla</button>
+          </div>
+        </div>`;
+      }
+    });
+  }
+
+  html += `<button class="btn btn-primary btn-block mt-3" onclick="confirmSync()">✅ Confirmar sincronización</button>`;
+  ui.openSheet(html);
+}
+function resolveSyncConflict(key, choice){
+  window._syncDecisions[key] = choice;
+  renderSyncReview();
+}
+function confirmSync(){
+  const conflicts = window._syncConflicts;
+  const unresolved = conflicts.filter(c=>!window._syncDecisions[conflictKey(c)]);
+  if(unresolved.length){ toast('Resuelve los '+unresolved.length+' caso(s) marcados antes de continuar'); return; }
+  applySync(window._syncRemote, window._syncDecisions, conflicts);
+}
+
+function applySync(remote, decisions, conflicts){
+  let addedCount = 0;
+
+  ['purchases','sales','expenses','cashCounts','notes','events','reminders','losses'].forEach(key=>{
+    const r = mergeById(DB[key], remote[key]);
+    DB[key] = r.merged;
+    addedCount += r.added;
+  });
+
+  // Ajustes de stock: si el usuario marcó un par como duplicado, no se agrega el del otro teléfono
+  const skipIds = new Set(conflicts.filter(c=>c.type==='stockdup' && decisions[conflictKey(c)]==='once').map(c=>c.remoteAdjId));
+  const filteredRemoteAdj = (remote.stockAdjustments||[]).filter(a=>!skipIds.has(a.id));
+  const rAdj = mergeById(DB.stockAdjustments, filteredRemoteAdj);
+  DB.stockAdjustments = rAdj.merged;
+  addedCount += rAdj.added;
+
+  // Categorías y subcategorías: unir por id
+  const catMap = {};
+  DB.categories.forEach(c=> catMap[c.id]=c);
+  (remote.categories||[]).forEach(rc=>{
+    if(!catMap[rc.id]){ catMap[rc.id]=rc; addedCount++; }
+    else{
+      const subMap = {};
+      catMap[rc.id].subs.forEach(s=> subMap[s.id]=s);
+      (rc.subs||[]).forEach(rs=>{ if(!subMap[rs.id]){ catMap[rc.id].subs.push(rs); addedCount++; } });
+    }
+  });
+  DB.categories = Object.values(catMap);
+
+  // Productos: unir por id. Si hubo conflicto de eliminado/activo, se aplica lo que decidió el usuario.
+  const deleteDecision = {};
+  conflicts.filter(c=>c.type==='delete').forEach(c=>{ deleteDecision[c.productId] = decisions[conflictKey(c)]; });
+
+  const prodMap = {};
+  DB.products.forEach(p=> prodMap[p.id]=p);
+  (remote.products||[]).forEach(rp=>{
+    const lp = prodMap[rp.id];
+    if(!lp){ prodMap[rp.id]=rp; addedCount++; return; }
+    const decision = deleteDecision[rp.id];
+    const lt = lp.updatedAt||lp.createdAt||'';
+    const rt = rp.updatedAt||rp.createdAt||'';
+    let merged = (rt > lt) ? Object.assign({}, rp) : Object.assign({}, lp);
+    if(decision){
+      merged.deletedAt = decision==='delete' ? (lp.deletedAt || rp.deletedAt || new Date().toISOString()) : null;
+    }
+    merged.stock = lp.stock;
+    prodMap[rp.id] = merged;
+  });
+  DB.products = Object.values(prodMap);
+
+  DB.invoiceCounter = Math.max(DB.invoiceCounter||1001, remote.invoiceCounter||1001);
+  recomputeStock();
+
+  // Sobregiros: aplicar lo que el usuario decidió para cada producto que quedó en negativo
+  const noteLines = [];
+  conflicts.filter(c=>c.type==='oversell').forEach(c=>{
+    const key = conflictKey(c);
+    const choice = decisions[key];
+    const p = DB.products.find(p=>p.id===c.productId);
+    const pName = p? p.name : 'Producto';
+    const cul = c.culprit;
+    let resultLine = '';
+    if(choice==='zero'){
+      DB.stockAdjustments.push({id:uid(), productId:c.productId, delta:c.deficit, reason:'Ajuste por sobregiro (a 0)', ts:new Date().toISOString()});
+      resultLine = `Se ajustó a 0: no había más existencia real.`;
+    } else if(choice==='addstock'){
+      DB.stockAdjustments.push({id:uid(), productId:c.productId, delta:c.deficit, reason:'Ajuste por sobregiro (unidad no registrada)', ts:new Date().toISOString()});
+      resultLine = `Se agregaron ${c.deficit} unidad(es) al almacén: sí existían pero no se habían registrado.`;
+    } else if(choice==='fixsale' && cul.kind==='venta'){
+      const sale = DB.sales.find(s=>s.id===cul.ref);
+      if(sale){
+        const item = sale.items[cul.itemIndex];
+        if(item){
+          const newQty = Math.max(0, item.qty - c.deficit);
+          item.qty = newQty;
+          sale.total = sale.items.reduce((a,it)=>a+it.qty*it.price,0);
+        }
+      }
+      resultLine = `Se corrigió la venta de las ${fmtTime(cul.ts)}: se registraron ${c.deficit} unidad(es) de menos.`;
+    }
+    noteLines.push(`🧾 ${pName} — sobregiro de ${c.deficit} unidad(es) detectado al sincronizar.\nAntes había ${c.balanceBeforeCulprit} disponibles. Venta de las ${fmtTime(cul.ts)} dejó el faltante.\nDecisión: ${resultLine}`);
+  });
+  conflicts.filter(c=>c.type==='delete').forEach(c=>{
+    const choice = decisions[conflictKey(c)];
+    noteLines.push(`🗑️ ${c.name} — estaba eliminado en un teléfono y activo en el otro. Decisión: ${choice==='delete'?'se eliminó':'se mantuvo activo'}.`);
+  });
+  conflicts.filter(c=>c.type==='stockdup').forEach(c=>{
+    const choice = decisions[conflictKey(c)];
+    const pName = (DB.products.find(p=>p.id===c.productId)||{}).name || 'Producto';
+    noteLines.push(`⚠️ ${pName} — posible ajuste de stock duplicado (${c.localDelta} y ${c.remoteDelta}). Decisión: ${choice==='once'?'se aplicó solo una vez':'se aplicaron las dos, eran distintas'}.`);
+  });
+  if(noteLines.length){
+    DB.notes.push({
+      id:uid(), date:todayISO(),
+      text:`Resumen de sincronización (${nowStamp()}):\n\n`+noteLines.join('\n\n')
+    });
+  }
+
+  recomputeStock();
+  save();
+  ui.closeSheet();
+  DB.lastSyncAt = nowStamp();
+  save();
+  toast(addedCount>0? `Sincronizado: ${addedCount} registro(s) combinado(s)` : 'Ya estaba todo sincronizado');
+  renderView();
+}
+
+document.getElementById('restoreInputHidden').addEventListener('change', function(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  if(!confirm('Esto reemplazará todos los datos actuales. ¿Continuar?')){ e.target.value=''; return; }
+  const reader = new FileReader();
+  reader.onload = function(ev){
+    try{
+      const data = JSON.parse(ev.target.result);
+      DB = mergeWithDefaults(data);
+      recomputeStock();
+      save(); applySettings(); renderView();
+      toast('Datos restaurados');
+    }catch(err){ toast('Archivo inválido'); }
+  };
+  reader.readAsText(file);
+  e.target.value='';
+});
+function resetApp(){
+  if(!confirm('Esto borrará TODOS los datos (productos, ventas, compras, etc). ¿Seguro?')) return;
+  if(!confirm('Última confirmación: esta acción no se puede deshacer. ¿Restablecer todo?')) return;
+  DB = defaultDB();
+  save(); applySettings(); toast('Aplicación restablecida'); app.go('home');
+}
+
+applySettings();
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
+  });
+}
+</script>
+</body>
+</html>
