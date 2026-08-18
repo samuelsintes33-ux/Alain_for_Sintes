@@ -402,7 +402,7 @@ function defaultDB(){
     clients:[],
     clientPayments:[],
     settings:{fontScale:1, theme:'verde', themeMode:'light', accentOverride:null, cashDenoms:[1000,500,200,100,50,20,10,5,2,1], usdRate:0, usdRateUpdated:'', defaultMinStock:5, qtySteps:[5,10,20,24], transferSurchargePct:0, notifEnabled:false,
-      vendorPermissions:{editInventory:false, reportLosses:false, addClients:false, deleteProducts:false}},
+      vendorPermissions:{editInventory:false, reportLosses:false, addClients:false, deleteProducts:false, setUsdRate:false, backupRestore:false}},
     invoiceCounter: 1001,
     saleCounter: 1001
   };
@@ -458,6 +458,7 @@ const ui = {
       '<div class="sheet-handle"></div>' + html;
     document.getElementById('overlay').classList.add('active');
     fitOverlayToViewport();
+    pushNavState();
   },
   closeSheet(){
     document.getElementById('overlay').classList.remove('active');
@@ -466,6 +467,7 @@ const ui = {
     document.getElementById('pickerSheetEl').innerHTML =
       '<div class="sheet-handle"></div>' + html;
     document.getElementById('pickerOverlay').classList.add('active');
+    pushNavState();
   },
   closePicker(){
     document.getElementById('pickerOverlay').classList.remove('active');
@@ -606,8 +608,49 @@ const app = {
     renderView();
     highlightNav();
     window.scrollTo(0,0);
+    pushNavState();
   }
 };
+
+/* ---------------- Botón de retroceder del teléfono ----------------
+   En vez de dejar que el botón "atrás" del teléfono cierre la app de golpe,
+   lo usamos para: 1) cerrar lo que esté abierto (buscador, ventanita),
+   2) si no hay nada abierto, ir al inicio del rol actual,
+   3) si ya estás en el inicio, preguntar si de verdad quiere salir. */
+let _allowExit = false;
+function pushNavState(){
+  try{ history.pushState({t:Date.now()}, ''); }catch(e){}
+}
+window.addEventListener('popstate', function(){
+  const pickerOpen = document.getElementById('pickerOverlay').classList.contains('active');
+  const sheetOpen = document.getElementById('overlay').classList.contains('active');
+  const roleHome = app.role==='admin' ? 'home' : 'sales';
+
+  if(pickerOpen){
+    ui.closePicker();
+    pushNavState();
+    return;
+  }
+  if(sheetOpen){
+    ui.closeSheet();
+    pushNavState();
+    return;
+  }
+  if(app.role && app.view !== roleHome){
+    app.go(roleHome);
+    return;
+  }
+  if(_allowExit){
+    _allowExit = false;
+    return; // dejamos que el navegador cierre de verdad esta vez
+  }
+  pushNavState(); // "atrapamos" este atrás para poder preguntar primero
+  if(confirm('¿Seguro que quieres salir de la aplicación?')){
+    _allowExit = true;
+    history.back();
+  }
+});
+pushNavState(); // primer escalón, para que el primer atrás no cierre la app de una
 
 function applySettings(){
   const s = DB.settings;
@@ -1948,6 +1991,16 @@ function openSaleDetail(saleId){
 /* =========================================================
    CAJA (conteo de efectivo + conversor de moneda)
    ========================================================= */
+/* Los conteos de caja guardados antes de este cambio tienen la fecha ya en texto
+   formateado (no ISO), y no se pueden reinterpretar de forma confiable. Esta función
+   los muestra igual tal cual, y a los nuevos (formato ISO) les da formato bonito. */
+function cashCountDateLabel(c){
+  if(c.date.includes('T')) return new Date(c.date).toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'});
+  return c.date; // conteo antiguo, ya viene como texto legible
+}
+function cashCountDateKey(c){
+  return c.date.includes('T') ? c.date.slice(0,10) : ''; // '' = no coincide con ningún día del calendario
+}
 function viewCash(){
   const denoms = DB.settings.cashDenoms;
   let html = `<div class="section-title">Conversor de moneda</div>
@@ -1977,13 +2030,34 @@ function viewCash(){
   <button class="btn btn-primary btn-block" onclick="saveCashCount()">Guardar conteo</button>`;
 
   if(DB.cashCounts.length){
-    html += `<div class="section-title">Historial de conteos</div><div class="card">`;
-    DB.cashCounts.slice().reverse().slice(0,10).forEach(c=>{
-      html += `<div class="list-item" style="cursor:pointer" onclick="openCashCountDetail('${c.id}')"><div class="thumb">💵</div>
-        <div class="li-body"><div class="li-title">${c.date}</div></div>
-        <div class="li-right"><div class="li-price mono">${fmt(c.total)}</div></div></div>`;
-    });
-    html += `</div>`;
+    const mode = app._cashHistMode || 'list';
+    html += `<div class="section-title">Historial de conteos</div>
+    <div class="tabbar">
+      <div class="tab-pill ${mode==='list'?'active':''}" onclick="app._cashHistMode='list';renderView()">Lista</div>
+      <div class="tab-pill ${mode==='calendar'?'active':''}" onclick="app._cashHistMode='calendar';renderView()">📅 Por día</div>
+    </div>`;
+    if(mode==='calendar'){
+      html += historyCalendarHTML('_cashCal', cashCountDateKey, DB.cashCounts, 'renderView');
+      const sel = app._cashCal.sel;
+      const dayList = DB.cashCounts.filter(c=>cashCountDateKey(c)===sel);
+      html += `<div class="section-title">${sel}${dayList.length?' — '+dayList.length+' conteo(s)':''}</div>`;
+      if(!dayList.length){
+        html += `<div class="empty" style="padding:20px"><div class="ed">Sin conteos este día</div></div>`;
+      } else {
+        html += `<div class="card">` + dayList.slice().reverse().map(c=>`
+          <div class="list-item" style="cursor:pointer" onclick="openCashCountDetail('${c.id}')"><div class="thumb">💵</div>
+            <div class="li-body"><div class="li-title">${cashCountDateLabel(c)}</div></div>
+            <div class="li-right"><div class="li-price mono">${fmt(c.total)}</div></div></div>`).join('') + `</div>`;
+      }
+    } else {
+      html += `<div class="card">`;
+      DB.cashCounts.slice().reverse().slice(0,10).forEach(c=>{
+        html += `<div class="list-item" style="cursor:pointer" onclick="openCashCountDetail('${c.id}')"><div class="thumb">💵</div>
+          <div class="li-body"><div class="li-title">${cashCountDateLabel(c)}</div></div>
+          <div class="li-right"><div class="li-price mono">${fmt(c.total)}</div></div></div>`;
+      });
+      html += `</div>`;
+    }
   }
   return html;
 }
@@ -1996,7 +2070,7 @@ function openCashCountDetail(id){
     .map(d=>`<div class="row" style="padding:4px 0"><span class="small">${fmt(d)} x${denoms[d]}</span><span class="mono small">${fmt(d*denoms[d])}</span></div>`)
     .join('') || `<div class="small muted">Sin billetes/monedas contados</div>`;
   ui.openSheet(`
-    <div class="sheet-header"><div class="sheet-title">Conteo del ${c.date}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="sheet-header"><div class="sheet-title">Conteo del ${cashCountDateLabel(c)}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
     <div class="card">${rows}
       <hr class="sep">
       <div class="row"><span style="font-weight:800">Total</span><span class="mono" style="font-weight:800">${fmt(c.total)}</span></div>
@@ -2028,7 +2102,7 @@ function saveCashCount(){
   const denoms={};
   DB.settings.cashDenoms.forEach(d=>{ denoms[d] = parseInt(document.getElementById('denom_'+d).value)||0; });
   const total = calcCash();
-  DB.cashCounts.push({id:uid(), date:nowStamp(), denoms, total});
+  DB.cashCounts.push({id:uid(), date:new Date().toISOString(), denoms, total});
   save(); toast('Conteo guardado'); renderView();
 }
 
@@ -2461,9 +2535,11 @@ function viewSettings(){
     <div class="card">
       <div class="field" style="margin-bottom:0"><label>Recargo por pago con transferencia (%)</label><input type="number" step="0.1" id="setTransferPct" value="${DB.settings.transferSurchargePct||0}" onchange="DB.settings.transferSurchargePct=parseFloat(this.value)||0;save()"></div>
       <div class="small muted mt-2">Se usa como valor por defecto al elegir "Transferencia" en una venta, pero se puede ajustar en cada venta. Déjalo en 0 si no aplicas recargo por defecto.</div>
-    </div>
+    </div>`;
+  }
 
-    <div class="section-title">Tasa de cambio (USD ↔ ${esc(DB.meta.currency)})</div>
+  if(isAdmin || canVendor('setUsdRate')){
+    html += `<div class="section-title">Tasa de cambio (USD ↔ ${esc(DB.meta.currency)})</div>
     <div class="card">
       <div class="field"><label>1 USD equivale a</label><input type="number" step="0.01" id="setUsdRate" value="${DB.settings.usdRate||''}" placeholder="Ej. 400" onchange="DB.settings.usdRate=parseFloat(this.value)||0;DB.settings.usdRateUpdated='manual · '+todayISO();save()"></div>
       <div class="small muted mt-2" id="usdRateStatus">${DB.settings.usdRateUpdated? 'Última actualización: '+esc(DB.settings.usdRateUpdated) : 'Aún no configurada'}</div>
@@ -2472,11 +2548,13 @@ function viewSettings(){
       <div class="small muted mt-2" style="margin-bottom:8px">
         elTOQUE requiere una clave de API gratuita y personal. Solicítala en <span style="text-decoration:underline">tasas.eltoque.com/docs</span> y pégala aquí. Si el navegador bloquea la conexión, actualiza el número manualmente arriba con el valor que veas en eltoque.com.
       </div>
-      <input type="text" id="setEltoqueKey" value="${esc(DB.settings.eltoqueApiKey||'')}" placeholder="Clave de API de elTOQUE (opcional)" onchange="DB.settings.eltoqueApiKey=this.value.trim();save()">
+      <input type="text" id="setEltoqueKey" value="${esc(DB.settings.eltoqueApiKey||'')}" placeholder="Clave de API de elTOQUE (opcional)" ${isAdmin?'':'disabled'} onchange="DB.settings.eltoqueApiKey=this.value.trim();save()">
       <button class="btn btn-outline btn-block mt-2" onclick="fetchEltoqueRate()">🔄 Actualizar tasa desde elTOQUE</button>
-    </div>
+    </div>`;
+  }
 
-    <div class="section-title">Inventario</div>
+  if(isAdmin){
+    html += `<div class="section-title">Inventario</div>
     <div class="card">
       <div class="field" style="margin-bottom:0"><label>Avisar stock bajo cuando queden menos de...</label><input type="number" id="setDefaultMinStock" value="${DB.settings.defaultMinStock}" onchange="DB.settings.defaultMinStock=parseInt(this.value)||1;save()"></div>
       <div class="small muted mt-2">Se usa como valor inicial al crear un producto nuevo. Cada producto lo puedes ajustar aparte si necesita un número distinto.</div>
@@ -2507,6 +2585,8 @@ function viewSettings(){
       ${vendorPermToggle('deleteProducts','Eliminar productos')}
       ${vendorPermToggle('reportLosses','Reportar pérdidas de productos')}
       ${vendorPermToggle('addClients','Agregar y editar clientes')}
+      ${vendorPermToggle('setUsdRate','Ajustar la tasa del dólar')}
+      ${vendorPermToggle('backupRestore','Importar y exportar copias de seguridad')}
     </div>
 
     <div class="section-title">Seguridad</div>
@@ -2568,12 +2648,18 @@ function viewSettings(){
       <div class="small muted mt-2" id="checkUpdateStatus"></div>
     </div>
 
-    <div class="section-title">Copia de seguridad</div>
+    <div class="section-title">Restablecer aplicación</div>
+    <div class="card stack">
+      <button class="btn btn-danger btn-block" onclick="resetApp()">🗑️ Restablecer aplicación</button>
+    </div>`;
+  }
+
+  if(isAdmin || canVendor('backupRestore')){
+    html += `<div class="section-title">Copia de seguridad</div>
     <div class="card stack">
       <button class="btn btn-outline btn-block" onclick="backupData()">⬇️ Descargar copia de seguridad</button>
       <div class="small muted" style="margin-bottom:2px">Restaurar reemplaza TODOS los datos de este teléfono (úsalo solo para restaurar tu propio respaldo, no para juntar datos de dos personas).</div>
       <button class="btn btn-outline btn-block" onclick="document.getElementById('restoreInputHidden').click()">⬆️ Restaurar copia completa (reemplaza todo)</button>
-      <button class="btn btn-danger btn-block" onclick="resetApp()">🗑️ Restablecer aplicación</button>
     </div>`;
   }
   html += `<div class="small muted" style="text-align:center;margin-top:18px">AlmacénPro · datos guardados solo en este dispositivo</div>`;
