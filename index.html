@@ -377,6 +377,7 @@ const ACCENT_SWATCHES = [
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
 function todayISO(){ const d=new Date(); return d.toISOString().slice(0,10); }
 function nowStamp(){ return new Date().toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'}); }
+function round2(n){ return Math.round((Number(n)||0)*100)/100; }
 function fmt(n){ n = Number(n)||0; return DB.meta.currency + n.toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function usdEq(n, rateOverride){ const r=(rateOverride!=null && rateOverride>0)?rateOverride:DB.settings.usdRate; if(!r) return ''; return '$'+((Number(n)||0)/r).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2})+' USD'; }
 function fmtUsdLine(n, rateOverride){ const r=(rateOverride!=null && rateOverride>0)?rateOverride:DB.settings.usdRate; return r>0 ? `<div class="small muted" style="margin-top:1px">≈ ${usdEq(n, rateOverride)}</div>` : ''; }
@@ -401,6 +402,11 @@ function defaultDB(){
     stockAdjustments:[],
     clients:[],
     clientPayments:[],
+    clientDebtAdjustments:[],
+    consignments:[],
+    clientReturns:[],
+    clientSales:[],
+    clientProductPrices:{},
     settings:{fontScale:1, theme:'verde', themeMode:'light', accentOverride:null, cashDenoms:[1000,500,200,100,50,20,10,5,2,1], usdRate:0, usdRateUpdated:'', defaultMinStock:5, qtySteps:[5,10,20,24], transferSurchargePct:0, notifEnabled:false,
       vendorPermissions:{editInventory:false, reportLosses:false, addClients:false, deleteProducts:false, setUsdRate:false, backupRestore:false}},
     invoiceCounter: 1001,
@@ -437,6 +443,8 @@ function recomputeStock(){
   DB.products.forEach(p=> map[p.id]=0);
   DB.purchases.forEach(pu=> pu.items.forEach(it=>{ if(map[it.productId]!=null) map[it.productId]+=it.qty; }));
   DB.sales.forEach(s=> s.items.forEach(it=>{ if(map[it.productId]!=null) map[it.productId]-=it.qty; }));
+  (DB.consignments||[]).forEach(c=> c.items.forEach(it=>{ if(map[it.productId]!=null) map[it.productId]-=it.qty; }));
+  (DB.clientReturns||[]).forEach(r=> r.items.forEach(it=>{ if(map[it.productId]!=null) map[it.productId]+=it.qty; }));
   (DB.stockAdjustments||[]).forEach(a=>{ if(map[a.productId]!=null) map[a.productId]+=a.delta; });
   DB.products.forEach(p=> p.stock = map[p.id]||0);
 }
@@ -448,7 +456,8 @@ function toast(msg){
   t.textContent = msg;
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=>t.classList.remove('show'), 2200);
+  const duration = msg && msg.length>60 ? 5000 : 2200;
+  toastTimer = setTimeout(()=>t.classList.remove('show'), duration);
 }
 
 /* ---------------- UI: sheet / modal ---------------- */
@@ -985,9 +994,14 @@ function openProductForm(existing, onSaved){
     <div class="field"><label>Descripción</label><textarea id="fpDesc" rows="2" placeholder="Detalles del producto">${esc(p.desc)}</textarea></div>
     <div class="field"><label>Medidas / presentación</label><input type="text" id="fpMeasures" value="${esc(p.measures)}" placeholder="Ej. 30x20cm, talla M, 1L"></div>
     <div class="field-row">
-      <div class="field"><label>Precio de compra (costo)</label><input type="number" step="0.01" id="fpCost" value="${p.costPrice}"></div>
+      <div class="field"><label>Precio de compra (costo)</label><input type="number" step="0.01" id="fpCost" value="${p.costPrice}" oninput="updateFpCostHint()"></div>
       <div class="field"><label>Stock actual</label><input type="number" id="fpStock" value="${p.stock}"></div>
     </div>
+    <div class="gap-2 mb-1" id="fpCurrencyToggle">
+      <button class="btn btn-primary btn-sm btn-block" id="fpCurCP" onclick="setFpCostCurrency('CP')">Costo en CP</button>
+      <button class="btn btn-outline btn-sm btn-block" id="fpCurUSD" onclick="setFpCostCurrency('USD')">Costo en USD</button>
+    </div>
+    <div class="small muted" id="fpCostHint" style="margin-bottom:8px"></div>
     <div class="mt-2" id="fpStockSteps"></div>
     <div class="field mt-2"><label>Alerta de stock bajo (mínimo)</label><input type="number" id="fpMin" value="${p.minStock}"></div>
     <label>Precios de venta (puedes agregar varios: menudeo, mayoreo, etc.)</label>
@@ -999,6 +1013,36 @@ function openProductForm(existing, onSaved){
   fillSubSelect(p.catId, p.subId);
   renderPriceRows();
   document.getElementById('fpStockSteps').innerHTML = qtyStepsHTML('fpStock', null);
+  window._fpCostCurrency = 'CP';
+}
+function setFpCostCurrency(cur){
+  if(cur==='USD' && !(DB.settings.usdRate>0)){
+    toast('Configura primero la tasa del dólar en Caja');
+    return;
+  }
+  const prevCur = window._fpCostCurrency||'CP';
+  const input = document.getElementById('fpCost');
+  const entered = parseFloat(input.value)||0;
+  const cp = prevCur==='USD' ? entered*(DB.settings.usdRate||0) : entered;
+  window._fpCostCurrency = cur;
+  input.value = cur==='USD' ? round2(cp/(DB.settings.usdRate||1)) : round2(cp);
+  const btnCP = document.getElementById('fpCurCP'), btnUSD = document.getElementById('fpCurUSD');
+  if(btnCP) btnCP.className = 'btn btn-sm btn-block ' + (cur==='CP'?'btn-primary':'btn-outline');
+  if(btnUSD) btnUSD.className = 'btn btn-sm btn-block ' + (cur==='USD'?'btn-primary':'btn-outline');
+  updateFpCostHint();
+}
+function fpCostInCP(){
+  const entered = parseFloat(document.getElementById('fpCost').value)||0;
+  return (window._fpCostCurrency||'CP')==='USD' ? entered*(DB.settings.usdRate||0) : entered;
+}
+function updateFpCostHint(){
+  const el = document.getElementById('fpCostHint');
+  if(!el) return;
+  if((window._fpCostCurrency||'CP')==='USD'){
+    el.textContent = 'Equivale a ' + fmt(fpCostInCP());
+  } else {
+    el.textContent = '';
+  }
 }
 function fillSubSelect(catId, selectedSub){
   const cat = DB.categories.find(c=>c.id===catId);
@@ -1056,7 +1100,7 @@ function saveProduct(){
     desc: document.getElementById('fpDesc').value.trim(),
     measures: document.getElementById('fpMeasures').value.trim(),
     photo: ep.photo || '',
-    costPrice: parseFloat(document.getElementById('fpCost').value)||0,
+    costPrice: fpCostInCP(),
     stock: currentStock,
     minStock: parseFloat(document.getElementById('fpMin').value)||0,
     prices: ep.prices.filter(pr=>pr.label.trim()!=='').map(pr=>({label:pr.label.trim(),price:pr.price||0})),
@@ -1241,6 +1285,7 @@ function selectFromProductSearch(pid){
 function openPurchaseForm(){
   window._purchaseCart = [];
   window._pfSelectedProduct = null;
+  window._pfCostCurrency = 'CP';
   ui.openSheet(`
     <div class="sheet-header"><div class="sheet-title">Nueva compra</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
     <div class="field"><label>Proveedor</label><input type="text" id="pfSupplier" placeholder="Nombre del proveedor"></div>
@@ -1257,6 +1302,10 @@ function openPurchaseForm(){
       </div>
       <div class="field"><label>Costo unitario</label><input type="number" step="0.01" id="pfCost" value="0" oninput="updatePfLineTotal()"></div>
     </div>
+    <div class="gap-2 mb-1" id="pfCurrencyToggle">
+      <button class="btn btn-primary btn-sm btn-block" id="pfCurCP" onclick="setPfCostCurrency('CP')">Costo en CP</button>
+      <button class="btn btn-outline btn-sm btn-block" id="pfCurUSD" onclick="setPfCostCurrency('USD')">Costo en USD</button>
+    </div>
     <div class="mt-2" id="pfQtySteps"></div>
     <div class="small muted" id="pfLineTotal" style="margin-bottom:8px"></div>
     <button class="btn btn-ghost btn-block" onclick="addPurchaseLine()">+ Agregar a la compra</button>
@@ -1272,6 +1321,26 @@ function renderPfQtySteps(){
   if(!wrap) return;
   wrap.innerHTML = qtyStepsHTML('pfQty', 'updatePfLineTotal');
 }
+function setPfCostCurrency(cur){
+  if(cur==='USD' && !(DB.settings.usdRate>0)){
+    toast('Configura primero la tasa del dólar en Caja');
+    return;
+  }
+  window._pfCostCurrency = cur;
+  const btnCP = document.getElementById('pfCurCP'), btnUSD = document.getElementById('pfCurUSD');
+  if(btnCP) btnCP.className = 'btn btn-sm btn-block ' + (cur==='CP'?'btn-primary':'btn-outline');
+  if(btnUSD) btnUSD.className = 'btn btn-sm btn-block ' + (cur==='USD'?'btn-primary':'btn-outline');
+  const p = window._pfSelectedProduct;
+  const costInput = document.getElementById('pfCost');
+  if(p && costInput){
+    costInput.value = cur==='USD' ? round2((p.costPrice||0) / (DB.settings.usdRate||1)) : (p.costPrice||0);
+  }
+  updatePfLineTotal();
+}
+function pfEnteredCostToCP(){
+  const entered = parseFloat(document.getElementById('pfCost').value)||0;
+  return window._pfCostCurrency==='USD' ? entered*(DB.settings.usdRate||0) : entered;
+}
 function selectPfProduct(pid){
   const p = DB.products.find(p=>p.id===pid);
   if(!p) return;
@@ -1282,22 +1351,28 @@ function selectPfProduct(pid){
       <div class="li-body"><div class="li-title">${esc(p.name)}</div><div class="li-sub">Seleccionado</div></div>
       <button class="btn btn-danger btn-sm" onclick="window._pfSelectedProduct=null;document.getElementById('pfSelectedBox').innerHTML=''">✕</button>
     </div>`;
-  document.getElementById('pfCost').value = p.costPrice || 0;
+  document.getElementById('pfCost').value = window._pfCostCurrency==='USD' ? round2((p.costPrice||0)/(DB.settings.usdRate||1)) : (p.costPrice || 0);
   updatePfLineTotal();
 }
 function updatePfLineTotal(){
   const el = document.getElementById('pfLineTotal');
   if(!el) return;
   const qty = parseFloat(document.getElementById('pfQty').value)||0;
-  const cost = parseFloat(document.getElementById('pfCost').value)||0;
-  el.textContent = qty && cost ? `Subtotal: ${fmt(qty*cost)}` : '';
+  const costCP = pfEnteredCostToCP();
+  if(!qty || !costCP){ el.textContent=''; return; }
+  let txt = `Subtotal: ${fmt(qty*costCP)}`;
+  if(window._pfCostCurrency==='USD') txt += ` (costo unitario ≈ ${fmt(costCP)})`;
+  el.textContent = txt;
 }
 function addPurchaseLine(){
   const p = window._pfSelectedProduct;
   const qty = parseFloat(document.getElementById('pfQty').value)||0;
-  const cost = parseFloat(document.getElementById('pfCost').value)||0;
+  const enteredCost = parseFloat(document.getElementById('pfCost').value)||0;
+  const currency = window._pfCostCurrency||'CP';
   if(!p || qty<=0) return toast('Busca y selecciona un producto primero');
-  window._purchaseCart.push({productId:p.id, qty, cost});
+  if(currency==='USD' && !(DB.settings.usdRate>0)) return toast('Configura la tasa del dólar en Caja primero');
+  const cost = currency==='USD' ? round2(enteredCost*DB.settings.usdRate) : enteredCost;
+  window._purchaseCart.push({productId:p.id, qty, cost, costCurrency:currency, costForeign: currency==='USD'?enteredCost:null, usdRateUsed: currency==='USD'?DB.settings.usdRate:null});
   window._pfSelectedProduct = null;
   document.getElementById('pfSelectedBox').innerHTML='';
   document.getElementById('pfQty').value = 0;
@@ -1311,7 +1386,8 @@ function renderPurchaseLines(){
   wrap.innerHTML = window._purchaseCart.map((l,i)=>{
     const p = DB.products.find(p=>p.id===l.productId);
     total += l.qty*l.cost;
-    return `<div class="cart-line"><div class="li-body"><div class="li-title">${esc(p?p.name:'?')}</div><div class="li-sub">${l.qty} x ${fmt(l.cost)}</div></div>
+    const curNote = l.costCurrency==='USD' ? ` (compra en $${l.costForeign} c/u)` : '';
+    return `<div class="cart-line"><div class="li-body"><div class="li-title">${esc(p?p.name:'?')}</div><div class="li-sub">${l.qty} x ${fmt(l.cost)}${curNote}</div></div>
       <div style="text-align:right"><div class="mono" style="font-weight:700">${fmt(l.qty*l.cost)}</div>${fmtUsdLine(l.qty*l.cost)}</div>
       <button class="btn btn-danger btn-sm" onclick="window._purchaseCart.splice(${i},1);renderPurchaseLines()">✕</button></div>`;
   }).join('');
@@ -1726,8 +1802,247 @@ function renderClientPickResults(){
 
 function clientDebt(clientId){
   const owed = DB.sales.filter(s=>s.clientId===clientId && s.payment==='credit').reduce((a,s)=>a+s.total,0);
+  const consignOwed = (DB.clientSales||[]).filter(s=>s.clientId===clientId).reduce((a,s)=>a+s.total,0);
   const paid = DB.clientPayments.filter(p=>p.clientId===clientId).reduce((a,p)=>a+p.amount,0);
-  return owed - paid;
+  const adjustments = (DB.clientDebtAdjustments||[]).filter(a=>a.clientId===clientId).reduce((a,x)=>a+x.amount,0);
+  return owed + consignOwed - paid + adjustments;
+}
+
+/* ---------------- CONSIGNACIÓN: mercancía depositada en clientes ---------------- */
+function clientProductStockMap(clientId){
+  const map = {};
+  (DB.consignments||[]).filter(c=>c.clientId===clientId).forEach(c=> c.items.forEach(it=>{ map[it.productId]=(map[it.productId]||0)+it.qty; }));
+  (DB.clientSales||[]).filter(s=>s.clientId===clientId).forEach(s=> s.items.forEach(it=>{ map[it.productId]=(map[it.productId]||0)-it.qty; }));
+  (DB.clientReturns||[]).filter(r=>r.clientId===clientId).forEach(r=> r.items.forEach(it=>{ map[it.productId]=(map[it.productId]||0)-it.qty; }));
+  return map;
+}
+function clientProductPriceKey(clientId, productId){ return clientId+'::'+productId; }
+function getClientProductPrice(clientId, productId){
+  return DB.clientProductPrices ? DB.clientProductPrices[clientProductPriceKey(clientId,productId)] : undefined;
+}
+function setClientProductPrice(clientId, productId, price){
+  if(!DB.clientProductPrices) DB.clientProductPrices = {};
+  DB.clientProductPrices[clientProductPriceKey(clientId,productId)] = price;
+}
+
+function openClientDepositForm(clientId){
+  window._consignCart = [];
+  window._consignSelectedProduct = null;
+  const c = DB.clients.find(x=>x.id===clientId);
+  if(!c) return;
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Depositar mercancía — ${esc(c.name)}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="small muted" style="margin-bottom:10px">Los productos salen del almacén principal y quedan a nombre de este cliente.</div>
+    <label>Agregar producto al depósito</label>
+    <div id="consignSelectedBox" class="mt-2"></div>
+    <button class="btn btn-outline btn-block mt-2" onclick="openProductSearch(function(pid){selectConsignProduct(pid);}, {allowCreate:false})">🔎 Buscar producto</button>
+    <div class="field mt-2"><label>Cantidad</label><input type="number" id="consignQty" value="0"></div>
+    <div class="mt-2" id="consignQtySteps"></div>
+    <button class="btn btn-ghost btn-block mt-2" onclick="addConsignLine()">+ Agregar al depósito</button>
+    <div id="consignLines" class="stack mt-2"></div>
+    <button class="btn btn-primary btn-block mt-3" onclick="saveConsignDeposit('${clientId}')">Guardar depósito</button>
+  `);
+  document.getElementById('consignQtySteps').innerHTML = qtyStepsHTML('consignQty', null);
+  renderConsignLines();
+}
+function selectConsignProduct(pid){
+  const p = DB.products.find(p=>p.id===pid);
+  if(!p) return;
+  window._consignSelectedProduct = p;
+  document.getElementById('consignSelectedBox').innerHTML = `
+    <div class="list-item" style="background:var(--surface-2);border-radius:10px;padding:8px 10px">
+      ${thumbHtml(p)}
+      <div class="li-body"><div class="li-title">${esc(p.name)}</div><div class="li-sub">${p.stock} en almacén</div></div>
+      <button class="btn btn-danger btn-sm" onclick="window._consignSelectedProduct=null;document.getElementById('consignSelectedBox').innerHTML=''">✕</button>
+    </div>`;
+}
+function addConsignLine(){
+  const p = window._consignSelectedProduct;
+  const qty = parseFloat(document.getElementById('consignQty').value)||0;
+  if(!p || qty<=0) return toast('Busca y selecciona un producto primero');
+  if(qty>p.stock) return toast('No hay suficiente stock en el almacén');
+  window._consignCart.push({productId:p.id, qty});
+  window._consignSelectedProduct = null;
+  document.getElementById('consignSelectedBox').innerHTML = '';
+  document.getElementById('consignQty').value = 0;
+  renderConsignLines();
+}
+function renderConsignLines(){
+  const wrap = document.getElementById('consignLines');
+  if(!wrap) return;
+  wrap.innerHTML = window._consignCart.map((l,i)=>{
+    const p = DB.products.find(p=>p.id===l.productId);
+    return `<div class="cart-line"><div class="li-body"><div class="li-title">${esc(p?p.name:'?')}</div><div class="li-sub">${l.qty} unidades</div></div>
+      <button class="btn btn-danger btn-sm" onclick="window._consignCart.splice(${i},1);renderConsignLines()">✕</button></div>`;
+  }).join('');
+}
+function saveConsignDeposit(clientId){
+  if(!window._consignCart.length) return toast('Agrega al menos un producto');
+  const items = window._consignCart;
+  DB.consignments.push({id:uid(), clientId, date:new Date().toISOString(), items, createdAt:new Date().toISOString()});
+  items.forEach(it=>{
+    if(getClientProductPrice(clientId, it.productId)==null){
+      const p = DB.products.find(p=>p.id===it.productId);
+      setClientProductPrice(clientId, it.productId, p && p.prices[0] ? p.prices[0].price : 0);
+    }
+  });
+  recomputeStock();
+  save();
+  ui.closeSheet();
+  toast('Mercancía depositada');
+  openClientDetail(clientId);
+}
+
+function openClientReportSaleForm(clientId){
+  const stockMap = clientProductStockMap(clientId);
+  const heldIds = Object.keys(stockMap).filter(pid=>stockMap[pid]>0);
+  const c = DB.clients.find(x=>x.id===clientId);
+  if(!c) return;
+  if(!heldIds.length){ toast('Este cliente no tiene mercancía depositada'); return; }
+  window._clientSaleClientId = clientId;
+  const rows = heldIds.map(pid=>{
+    const p = DB.products.find(p=>p.id===pid);
+    const price = getClientProductPrice(clientId,pid)||0;
+    return `<div class="list-item">
+      ${thumbHtml(p)}
+      <div class="li-body"><div class="li-title">${esc(p?p.name:'?')}</div><div class="li-sub">Tiene ${stockMap[pid]} · precio ${fmt(price)}</div></div>
+      <div style="width:70px"><input type="number" class="mono" id="csQty_${pid}" value="0" style="width:100%;text-align:right" oninput="computeClientSaleTotal()"></div>
+    </div>`;
+  }).join('');
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Venta reportada — ${esc(c.name)}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="small muted" style="margin-bottom:8px">Escribe cuánto vendió de cada producto. Se usa el precio congelado que tiene con este cliente; esto se sumará a su deuda.</div>
+    <div class="card">${rows}</div>
+    <div class="row mt-3"><span style="font-weight:800">Total</span><span class="mono" style="font-weight:800" id="csTotalLabel">${fmt(0)}</span></div>
+    <button class="btn btn-primary btn-block mt-2" onclick="saveClientReportedSale('${clientId}')">Guardar venta</button>
+  `);
+}
+function computeClientSaleTotal(){
+  const clientId = window._clientSaleClientId;
+  const stockMap = clientProductStockMap(clientId);
+  let total=0;
+  Object.keys(stockMap).forEach(pid=>{
+    const el = document.getElementById('csQty_'+pid);
+    if(!el) return;
+    const qty = parseFloat(el.value)||0;
+    const price = getClientProductPrice(clientId,pid)||0;
+    total += qty*price;
+  });
+  const lbl = document.getElementById('csTotalLabel');
+  if(lbl) lbl.textContent = fmt(total);
+}
+function saveClientReportedSale(clientId){
+  const stockMap = clientProductStockMap(clientId);
+  const items=[];
+  let total=0;
+  for(const pid of Object.keys(stockMap)){
+    const el = document.getElementById('csQty_'+pid);
+    if(!el) continue;
+    const qty = parseFloat(el.value)||0;
+    if(qty<=0) continue;
+    if(qty>stockMap[pid]){ toast('Cantidad mayor a lo que tiene disponible'); return; }
+    const price = getClientProductPrice(clientId,pid)||0;
+    items.push({productId:pid, qty, price});
+    total += qty*price;
+  }
+  if(!items.length) return toast('Escribe alguna cantidad vendida');
+  DB.clientSales.push({id:uid(), clientId, date:new Date().toISOString(), items, total, createdAt:new Date().toISOString()});
+  save();
+  ui.closeSheet();
+  toast('Venta del cliente registrada');
+  openClientDetail(clientId);
+}
+
+function openClientReturnForm(clientId){
+  const stockMap = clientProductStockMap(clientId);
+  const heldIds = Object.keys(stockMap).filter(pid=>stockMap[pid]>0);
+  const c = DB.clients.find(x=>x.id===clientId);
+  if(!c) return;
+  if(!heldIds.length){ toast('Este cliente no tiene mercancía depositada'); return; }
+  const rows = heldIds.map(pid=>{
+    const p = DB.products.find(p=>p.id===pid);
+    return `<div class="list-item">
+      ${thumbHtml(p)}
+      <div class="li-body"><div class="li-title">${esc(p?p.name:'?')}</div><div class="li-sub">Tiene ${stockMap[pid]}</div></div>
+      <div style="width:70px"><input type="number" class="mono" id="crQty_${pid}" value="0" style="width:100%;text-align:right"></div>
+    </div>`;
+  }).join('');
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Devolución — ${esc(c.name)}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="small muted" style="margin-bottom:8px">Escribe cuánto devuelve al almacén (mercancía que no vendió, sin generar deuda).</div>
+    <div class="card">${rows}</div>
+    <button class="btn btn-primary btn-block mt-3" onclick="saveClientReturn('${clientId}')">Guardar devolución</button>
+  `);
+}
+function saveClientReturn(clientId){
+  const stockMap = clientProductStockMap(clientId);
+  const items=[];
+  for(const pid of Object.keys(stockMap)){
+    const el = document.getElementById('crQty_'+pid);
+    if(!el) continue;
+    const qty = parseFloat(el.value)||0;
+    if(qty<=0) continue;
+    if(qty>stockMap[pid]){ toast('Cantidad mayor a lo que tiene disponible'); return; }
+    items.push({productId:pid, qty});
+  }
+  if(!items.length) return toast('Escribe alguna cantidad a devolver');
+  DB.clientReturns.push({id:uid(), clientId, date:new Date().toISOString(), items, createdAt:new Date().toISOString()});
+  recomputeStock();
+  save();
+  ui.closeSheet();
+  toast('Devolución registrada');
+  openClientDetail(clientId);
+}
+
+function openEditClientPriceForm(clientId, productId){
+  if(app.role!=='admin') return toast('Solo el administrador puede cambiar este precio');
+  const p = DB.products.find(p=>p.id===productId);
+  const current = getClientProductPrice(clientId, productId) || 0;
+  ui.openPicker(`
+    <div class="sheet-header"><div class="sheet-title">Precio para ${esc(p?p.name:'')}</div><button class="sheet-close" onclick="ui.closePicker()">✕</button></div>
+    <div class="small muted" style="margin-bottom:10px">Este precio queda congelado para este cliente hasta que lo cambies aquí. Cambiar el precio general del catálogo no lo altera.</div>
+    <div class="field"><label>Precio por unidad</label><input type="number" step="0.01" id="ecpPrice" value="${current}"></div>
+    <button class="btn btn-primary btn-block" onclick="saveEditClientPrice('${clientId}','${productId}')">Guardar precio</button>
+  `);
+}
+function saveEditClientPrice(clientId, productId){
+  const price = parseFloat(document.getElementById('ecpPrice').value)||0;
+  setClientProductPrice(clientId, productId, price);
+  save();
+  ui.closePicker();
+  openClientDetail(clientId);
+}
+
+function openClientDebtAdjustForm(clientId){
+  if(app.role!=='admin') return toast('Solo el administrador puede ajustar la deuda manualmente');
+  window._debtAdjSign = 1;
+  ui.openPicker(`
+    <div class="sheet-header"><div class="sheet-title">Ajustar deuda</div><button class="sheet-close" onclick="ui.closePicker()">✕</button></div>
+    <div class="small muted" style="margin-bottom:10px">Usa esto para corregir manualmente lo que debe el cliente, sin que sea un pago ni una venta.</div>
+    <div class="gap-2 mb-2">
+      <button class="btn btn-primary btn-block btn-sm" id="adjMore" onclick="window._debtAdjSign=1;highlightDebtAdjSign()">➕ Debe más</button>
+      <button class="btn btn-outline btn-block btn-sm" id="adjLess" onclick="window._debtAdjSign=-1;highlightDebtAdjSign()">➖ Debe menos</button>
+    </div>
+    <div class="field"><label>Monto del ajuste</label><input type="number" step="0.01" id="adjAmount" value="0"></div>
+    <div class="field"><label>Motivo</label><input type="text" id="adjNote" placeholder="Ej. Producto dañado, corrección de conteo..."></div>
+    <button class="btn btn-primary btn-block" onclick="saveDebtAdjustment('${clientId}')">Guardar ajuste</button>
+  `);
+}
+function highlightDebtAdjSign(){
+  const more = document.getElementById('adjMore'), less = document.getElementById('adjLess');
+  if(!more||!less) return;
+  more.className = 'btn btn-block btn-sm ' + (window._debtAdjSign===1?'btn-primary':'btn-outline');
+  less.className = 'btn btn-block btn-sm ' + (window._debtAdjSign===-1?'btn-primary':'btn-outline');
+}
+function saveDebtAdjustment(clientId){
+  const amount = parseFloat(document.getElementById('adjAmount').value)||0;
+  if(amount<=0) return toast('Escribe un monto válido');
+  const note = document.getElementById('adjNote').value.trim();
+  const signed = amount * (window._debtAdjSign||1);
+  DB.clientDebtAdjustments.push({id:uid(), clientId, amount:signed, note, date:new Date().toISOString(), createdAt:new Date().toISOString()});
+  save();
+  ui.closePicker();
+  openClientDetail(clientId);
 }
 
 function viewClientsScreen(){
@@ -1830,7 +2145,19 @@ function openClientDetail(id){
   const paymentTx = DB.clientPayments.filter(p=>p.clientId===id).map(p=>({
     kind:'payment', date:p.date, payment:p
   }));
-  const tx = salesTx.concat(paymentTx).sort((a,b)=> new Date(b.date) - new Date(a.date));
+  const consignSaleTx = (DB.clientSales||[]).filter(s=>s.clientId===id).map(s=>({
+    kind:'consignSale', date:s.date, csale:s
+  }));
+  const depositTx = (DB.consignments||[]).filter(c=>c.clientId===id).map(c=>({
+    kind:'deposit', date:c.date, deposit:c
+  }));
+  const returnTx = (DB.clientReturns||[]).filter(r=>r.clientId===id).map(r=>({
+    kind:'return', date:r.date, ret:r
+  }));
+  const adjTx = (DB.clientDebtAdjustments||[]).filter(a=>a.clientId===id).map(a=>({
+    kind:'adjustment', date:a.date, adj:a
+  }));
+  const tx = salesTx.concat(paymentTx, consignSaleTx, depositTx, returnTx, adjTx).sort((a,b)=> new Date(b.date) - new Date(a.date));
 
   // Agrupar por mes
   const groups = {};
@@ -1860,16 +2187,66 @@ function openClientDetail(id){
             <div class="li-body"><div class="li-title">${dateLabel} · ${tag}</div><div class="li-sub">${detail}</div></div>
             <div class="li-right"><div class="mono small" style="font-weight:800">${fmt(s.total)}</div></div>
           </div>`;
-        } else {
+        } else if(t.kind==='payment'){
           const p = t.payment;
           historyHtml += `<div class="list-item">
             <div class="thumb">💰</div>
             <div class="li-body"><div class="li-title">${dateLabel} · Pago de deuda</div>${p.note?`<div class="li-sub">${esc(p.note)}</div>`:''}</div>
             <div class="li-right"><div class="mono small" style="font-weight:800;color:var(--ok)">-${fmt(p.amount)}</div></div>
           </div>`;
+        } else if(t.kind==='consignSale'){
+          const s = t.csale;
+          const detail = s.items.map(it=>{ const p=DB.products.find(p=>p.id===it.productId); return `${esc(p?p.name:'?')} x${it.qty}`; }).join(', ');
+          historyHtml += `<div class="list-item">
+            <div class="thumb">🧾</div>
+            <div class="li-body"><div class="li-title">${dateLabel} · Venta reportada por el cliente</div><div class="li-sub">${detail}</div></div>
+            <div class="li-right"><div class="mono small" style="font-weight:800">+${fmt(s.total)}</div></div>
+          </div>`;
+        } else if(t.kind==='deposit'){
+          const dep = t.deposit;
+          const detail = dep.items.map(it=>{ const p=DB.products.find(p=>p.id===it.productId); return `${esc(p?p.name:'?')} x${it.qty}`; }).join(', ');
+          historyHtml += `<div class="list-item">
+            <div class="thumb">📦</div>
+            <div class="li-body"><div class="li-title">${dateLabel} · Depósito de mercancía</div><div class="li-sub">${detail}</div></div>
+          </div>`;
+        } else if(t.kind==='return'){
+          const ret = t.ret;
+          const detail = ret.items.map(it=>{ const p=DB.products.find(p=>p.id===it.productId); return `${esc(p?p.name:'?')} x${it.qty}`; }).join(', ');
+          historyHtml += `<div class="list-item">
+            <div class="thumb">↩️</div>
+            <div class="li-body"><div class="li-title">${dateLabel} · Devolución al almacén</div><div class="li-sub">${detail}</div></div>
+          </div>`;
+        } else if(t.kind==='adjustment'){
+          const a = t.adj;
+          historyHtml += `<div class="list-item">
+            <div class="thumb">⚖️</div>
+            <div class="li-body"><div class="li-title">${dateLabel} · Ajuste manual de deuda</div>${a.note?`<div class="li-sub">${esc(a.note)}</div>`:''}</div>
+            <div class="li-right"><div class="mono small" style="font-weight:800;color:${a.amount>=0?'inherit':'var(--ok)'}">${a.amount>=0?'+':''}${fmt(a.amount)}</div></div>
+          </div>`;
         }
       });
     });
+  }
+
+  const stockMap = clientProductStockMap(id);
+  const heldProducts = Object.keys(stockMap).filter(pid=>stockMap[pid]>0);
+  let stockHtml;
+  if(heldProducts.length){
+    stockHtml = heldProducts.map(pid=>{
+      const p = DB.products.find(p=>p.id===pid);
+      const price = getClientProductPrice(id,pid)||0;
+      const qty = stockMap[pid];
+      return `<div class="list-item">
+        ${thumbHtml(p)}
+        <div class="li-body"><div class="li-title">${esc(p?p.name:'?')}</div><div class="li-sub">${qty} unidades · ${fmt(price)} c/u</div></div>
+        <div class="li-right" style="text-align:right">
+          <div class="mono small" style="font-weight:800">${fmt(qty*price)}</div>
+          ${app.role==='admin'?`<button class="btn btn-ghost btn-sm" onclick="openEditClientPriceForm('${id}','${pid}')">✏️ Precio</button>`:''}
+        </div>
+      </div>`;
+    }).join('');
+  } else {
+    stockHtml = `<div class="small muted" style="padding:4px 0">Sin mercancía depositada actualmente</div>`;
   }
 
   ui.openSheet(`
@@ -1888,6 +2265,16 @@ function openClientDetail(id){
         ${canVendor('addClients')?`<button class="btn btn-outline btn-block btn-sm" onclick="openClientForm('${c.id}')">✏️ Editar</button>`:''}
         ${debt>0?`<button class="btn btn-primary btn-block btn-sm" onclick="openClientPaymentForm('${c.id}')">💰 Registrar pago</button>`:''}
       </div>
+    </div>
+    <div class="section-title">Mercancía en su almacén</div>
+    <div class="card">${stockHtml}</div>
+    <div class="gap-2 mt-2">
+      <button class="btn btn-outline btn-block btn-sm" onclick="openClientDepositForm('${c.id}')">📦 Depositar</button>
+      <button class="btn btn-outline btn-block btn-sm" onclick="openClientReportSaleForm('${c.id}')">🧾 Venta reportada</button>
+    </div>
+    <div class="gap-2 mt-2">
+      <button class="btn btn-outline btn-block btn-sm" onclick="openClientReturnForm('${c.id}')">↩️ Devolución</button>
+      ${app.role==='admin'?`<button class="btn btn-outline btn-block btn-sm" onclick="openClientDebtAdjustForm('${c.id}')">⚖️ Ajustar deuda</button>`:''}
     </div>
     <div class="section-title">Historial</div>
     ${historyHtml}
@@ -2708,20 +3095,33 @@ async function fetchEltoqueRate(){
   if(!key){ toast('Ingresa tu clave de API de elTOQUE primero'); return; }
   toast('Consultando elTOQUE...');
   try{
+    const now = new Date();
+    const pad = n=>String(n).padStart(2,'0');
+    const dateStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     const res = await fetch('https://tasas.eltoque.com/v1/trmi', {
-      headers: { 'Authorization': 'Bearer '+key }
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer '+key,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({date_from: dateStr, date_to: dateStr})
     });
-    if(!res.ok) throw new Error('HTTP '+res.status);
+    if(!res.ok){
+      let bodyText = '';
+      try{ bodyText = await res.text(); }catch(e){}
+      throw new Error('HTTP '+res.status+(bodyText?(' — '+bodyText.slice(0,150)):''));
+    }
     const data = await res.json();
     const usd = data && data.tasas && data.tasas.USD;
-    if(!usd) throw new Error('Formato inesperado');
+    if(!usd) throw new Error('Respuesta sin campo tasas.USD: '+JSON.stringify(data).slice(0,150));
     DB.settings.usdRate = usd;
     DB.settings.usdRateUpdated = 'elTOQUE · '+todayISO();
     save();
     toast('Tasa actualizada: 1 USD = '+usd+' '+DB.meta.currency);
     renderView();
   }catch(err){
-    toast('No se pudo conectar. Actualiza el valor manualmente.');
+    console.error('Error consultando elTOQUE:', err);
+    toast('No se pudo conectar: '+(err.message||err)+'. Revisa la consola (F12) para más detalle.');
   }
 }
 
