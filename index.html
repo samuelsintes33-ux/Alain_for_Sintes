@@ -375,7 +375,13 @@ const ACCENT_SWATCHES = [
   {hex:'#7FA8D9', ink:'#0D1A28'}, {hex:'#C7D66D', ink:'#242B10'}, {hex:'#E8935A', ink:'#331F0A'},
 ];
 
-function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+function uid(){
+  if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c=>{
+    const r = Math.random()*16|0, v = c==='x' ? r : (r&0x3|0x8);
+    return v.toString(16);
+  });
+}
 function todayISO(){ const d=new Date(); return d.toISOString().slice(0,10); }
 function nowStamp(){ return new Date().toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'}); }
 function round2(n){ return Math.round((Number(n)||0)*100)/100; }
@@ -435,6 +441,7 @@ function load(){
 function save(){
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
   catch(e){ toast('No se pudo guardar (memoria llena)'); }
+  if(app.userId) syncPush().catch(err=>console.error('Error sincronizando:', err));
 }
 
 /* ---------------- STOCK BASADO EN HISTORIAL (evita conflictos al sincronizar) ---------------- */
@@ -652,6 +659,9 @@ async function afterAuthSuccess(){
   }
   app.userId = user.id;
   app.userName = profile.name;
+  toast('Sincronizando datos...');
+  await syncPullAll();
+  startRealtimeSync();
   app._doLogin(profile.role);
 }
 async function checkExistingSession(){
@@ -661,7 +671,198 @@ async function checkExistingSession(){
   }
 }
 async function supabaseSignOut(){
+  stopRealtimeSync();
   await sb.auth.signOut();
+}
+
+/* ---------------- SUPABASE: sincronización de datos ---------------- */
+// Tablas "mutables": se actualizan y se borran registros -> upsert + borrado de lo que ya no está.
+// Tablas "de historial": nunca se editan ni se borran -> solo se insertan las filas nuevas (mucho más ligero).
+const _syncedIds = {}; // tabla -> Set de ids que sabemos que ya existen en Supabase
+let _syncedCpp = new Set(); // claves "clientId::productId" ya sincronizadas
+let _syncBusy = false, _syncPending = false, _syncBooted = false;
+
+function markSynced(table, id){ (_syncedIds[table] || (_syncedIds[table]=new Set())).add(id); }
+
+async function syncUpsertTable(table, items, mapFn){
+  const set = _syncedIds[table] || (_syncedIds[table]=new Set());
+  if(items.length){
+    const rows = items.map(mapFn);
+    const { error } = await sb.from(table).upsert(rows, {onConflict:'id'});
+    if(error){ console.error('Sync '+table, error); return false; }
+    items.forEach(it=>set.add(it.id));
+  }
+  const currentIds = new Set(items.map(it=>it.id));
+  const toDelete = [...set].filter(id=>!currentIds.has(id));
+  if(toDelete.length){
+    const { error } = await sb.from(table).delete().in('id', toDelete);
+    if(!error) toDelete.forEach(id=>set.delete(id));
+  }
+  return true;
+}
+async function syncInsertOnlyTable(table, items, mapFn){
+  const set = _syncedIds[table] || (_syncedIds[table]=new Set());
+  const newOnes = items.filter(it=>!set.has(it.id));
+  if(!newOnes.length) return true;
+  const rows = newOnes.map(mapFn);
+  const { error } = await sb.from(table).insert(rows);
+  if(error){ console.error('Sync '+table, error); return false; }
+  newOnes.forEach(it=>set.add(it.id));
+  return true;
+}
+
+async function syncPush(){
+  if(!app.userId) return;
+  if(_syncBusy){ _syncPending = true; return; }
+  _syncBusy = true;
+  try{
+    await syncUpsertTable('categories', DB.categories, c=>({id:c.id, name:c.name, data:c}));
+    await syncUpsertTable('products', DB.products, p=>({id:p.id, category_id:p.catId||null, subcategory_id:p.subId||null, name:p.name, cost_price:p.costPrice||0, stock:p.stock||0, min_stock:p.minStock||0, data:p}));
+    await syncUpsertTable('clients', DB.clients, c=>({id:c.id, name:c.name, phone:c.phone||null, description:c.desc||'', data:c}));
+    await syncUpsertTable('reminders', DB.reminders, r=>({id:r.id, title:r.title, date:r.date, note:null, done:!!r.done, data:r}));
+
+    await syncInsertOnlyTable('purchases', DB.purchases, pu=>({id:pu.id, date:pu.date, supplier:pu.supplier||null, invoice_no:pu.invoiceNo||null, total:pu.total||0, usd_rate_at_purchase:pu.usdRateAtSale||null, created_by:app.userId, data:pu}));
+    await syncInsertOnlyTable('sales', DB.sales, s=>({id:s.id, date:s.date, client_id:s.clientId||null, payment:s.payment, total:s.total||0, created_by:app.userId, data:s}));
+    await syncInsertOnlyTable('client_payments', DB.clientPayments, p=>({id:p.id, client_id:p.clientId, amount:p.amount, note:p.note||null, date:p.date, created_by:app.userId, data:p}));
+    await syncInsertOnlyTable('client_debt_adjustments', DB.clientDebtAdjustments, a=>({id:a.id, client_id:a.clientId, amount:a.amount, note:a.note||null, date:a.date, created_by:app.userId, data:a}));
+    await syncInsertOnlyTable('consignments', DB.consignments, c=>({id:c.id, client_id:c.clientId, date:c.date, created_by:app.userId, data:c}));
+    await syncInsertOnlyTable('client_returns', DB.clientReturns, r=>({id:r.id, client_id:r.clientId, date:r.date, created_by:app.userId, data:r}));
+    await syncInsertOnlyTable('client_sales', DB.clientSales, s=>({id:s.id, client_id:s.clientId, date:s.date, total:s.total||0, created_by:app.userId, data:s}));
+    await syncInsertOnlyTable('expenses', DB.expenses, e=>({id:e.id, date:e.date, concept:e.concept, amount:e.amount, type:e.type||null, category:e.category||null, created_by:app.userId, data:e}));
+    await syncInsertOnlyTable('losses', DB.losses, l=>({id:l.id, product_id:l.productId||null, qty:l.qty, reason:l.reason||null, date:l.date, cost_impact:l.costImpact||0, created_by:app.userId, data:l}));
+    await syncInsertOnlyTable('stock_adjustments', DB.stockAdjustments, a=>({id:a.id, product_id:a.productId||null, delta:a.delta, reason:a.reason||null, ts:a.ts, created_by:app.userId, data:a}));
+    await syncInsertOnlyTable('cash_counts', DB.cashCounts, c=>({id:c.id, date:c.date, denoms:c.denoms||{}, total:c.total||0, created_by:app.userId, data:c}));
+    await syncInsertOnlyTable('calendar_events', DB.events, e=>({id:e.id, date:e.date, title:e.title, created_by:app.userId, data:e}));
+    await syncInsertOnlyTable('calendar_notes', DB.notes, n=>({id:n.id, date:n.date, text:n.text, created_by:app.userId, data:n}));
+
+    // precios congelados por cliente (dict "clienteId::productoId" -> precio)
+    const cppRows = Object.keys(DB.clientProductPrices||{}).map(k=>{
+      const [clientId, productId] = k.split('::');
+      return { key:k, client_id:clientId, product_id:productId, price:DB.clientProductPrices[k] };
+    });
+    if(cppRows.length){
+      const { error } = await sb.from('client_product_prices').upsert(cppRows.map(r=>({client_id:r.client_id, product_id:r.product_id, price:r.price})), {onConflict:'client_id,product_id'});
+      if(!error) cppRows.forEach(r=>_syncedCpp.add(r.key));
+    }
+    const currentCppKeys = new Set(cppRows.map(r=>r.key));
+    const cppToDelete = [..._syncedCpp].filter(k=>!currentCppKeys.has(k));
+    for(const k of cppToDelete){
+      const [clientId, productId] = k.split('::');
+      await sb.from('client_product_prices').delete().eq('client_id', clientId).eq('product_id', productId);
+      _syncedCpp.delete(k);
+    }
+
+    // configuración general (una sola fila)
+    const s = DB.settings;
+    await sb.from('app_settings').upsert({
+      id:1, biz_name:DB.meta.bizName||'Mi Negocio', currency_symbol:DB.meta.currency||'$',
+      usd_rate:s.usdRate||0, usd_rate_updated:s.usdRateUpdated||'', eltoque_api_key:s.eltoqueApiKey||null,
+      low_stock_threshold:s.defaultMinStock||5, transfer_fee_percent:s.transferSurchargePct||0,
+      font_scale:s.fontScale||1, theme:s.theme||'verde', theme_mode:s.themeMode||'light', accent_override:s.accentOverride||null,
+      cash_denoms:s.cashDenoms||[], default_min_stock:s.defaultMinStock||5, qty_steps:s.qtySteps||[],
+      transfer_surcharge_pct:s.transferSurchargePct||0, notif_enabled:!!s.notifEnabled, vendor_permissions:s.vendorPermissions||{},
+      invoice_counter:DB.invoiceCounter||1001, sale_counter:DB.saleCounter||1001, admin_password:s.adminPassword||null,
+      updated_at:new Date().toISOString()
+    }, {onConflict:'id'});
+  } finally {
+    _syncBusy = false;
+    if(_syncPending){ _syncPending = false; syncPush(); }
+  }
+}
+
+async function syncPullAll(){
+  const [cats, prods, clis, rems, purs, sals, cpays, cadjs, cons, crets, csals, exps, loss, sadj, ccnt, cevt, cnote, cpp, settingsRes] = await Promise.all([
+    sb.from('categories').select('data'),
+    sb.from('products').select('data'),
+    sb.from('clients').select('data'),
+    sb.from('reminders').select('data'),
+    sb.from('purchases').select('data'),
+    sb.from('sales').select('data'),
+    sb.from('client_payments').select('data'),
+    sb.from('client_debt_adjustments').select('data'),
+    sb.from('consignments').select('data'),
+    sb.from('client_returns').select('data'),
+    sb.from('client_sales').select('data'),
+    sb.from('expenses').select('data'),
+    sb.from('losses').select('data'),
+    sb.from('stock_adjustments').select('data'),
+    sb.from('cash_counts').select('data'),
+    sb.from('calendar_events').select('data'),
+    sb.from('calendar_notes').select('data'),
+    sb.from('client_product_prices').select('client_id, product_id, price'),
+    sb.from('app_settings').select('*').eq('id',1).single()
+  ]);
+  const unwrap = res => (res.data||[]).map(r=>r.data);
+  DB.categories = unwrap(cats); if(!DB.categories.length) DB.categories = defaultDB().categories;
+  DB.products = unwrap(prods);
+  DB.clients = unwrap(clis);
+  DB.reminders = unwrap(rems);
+  DB.purchases = unwrap(purs);
+  DB.sales = unwrap(sals);
+  DB.clientPayments = unwrap(cpays);
+  DB.clientDebtAdjustments = unwrap(cadjs);
+  DB.consignments = unwrap(cons);
+  DB.clientReturns = unwrap(crets);
+  DB.clientSales = unwrap(csals);
+  DB.expenses = unwrap(exps);
+  DB.losses = unwrap(loss);
+  DB.stockAdjustments = unwrap(sadj);
+  DB.cashCounts = unwrap(ccnt);
+  DB.events = unwrap(cevt);
+  DB.notes = unwrap(cnote);
+  DB.clientProductPrices = {};
+  (cpp.data||[]).forEach(r=>{ DB.clientProductPrices[r.client_id+'::'+r.product_id] = r.price; });
+
+  // reconstruir los índices de "ya sincronizado" con lo que acabamos de traer
+  const setIds = (table, arr) => { _syncedIds[table] = new Set(arr.map(it=>it.id)); };
+  setIds('categories', DB.categories); setIds('products', DB.products); setIds('clients', DB.clients);
+  setIds('reminders', DB.reminders); setIds('purchases', DB.purchases); setIds('sales', DB.sales);
+  setIds('client_payments', DB.clientPayments); setIds('client_debt_adjustments', DB.clientDebtAdjustments);
+  setIds('consignments', DB.consignments); setIds('client_returns', DB.clientReturns);
+  setIds('client_sales', DB.clientSales); setIds('expenses', DB.expenses); setIds('losses', DB.losses);
+  setIds('stock_adjustments', DB.stockAdjustments); setIds('cash_counts', DB.cashCounts);
+  setIds('calendar_events', DB.events); setIds('calendar_notes', DB.notes);
+  _syncedCpp = new Set((cpp.data||[]).map(r=>r.client_id+'::'+r.product_id));
+
+  const st = settingsRes.data;
+  if(st){
+    DB.meta.bizName = st.biz_name; DB.meta.currency = st.currency_symbol;
+    Object.assign(DB.settings, {
+      usdRate:st.usd_rate, usdRateUpdated:st.usd_rate_updated, eltoqueApiKey:st.eltoque_api_key||'',
+      defaultMinStock:st.default_min_stock, transferSurchargePct:st.transfer_surcharge_pct,
+      fontScale:st.font_scale, theme:st.theme, themeMode:st.theme_mode, accentOverride:st.accent_override,
+      cashDenoms:st.cash_denoms, qtySteps:st.qty_steps, notifEnabled:st.notif_enabled,
+      vendorPermissions:st.vendor_permissions, adminPassword:st.admin_password||''
+    });
+    DB.invoiceCounter = st.invoice_counter; DB.saleCounter = st.sale_counter;
+  }
+  recomputeStock();
+  save(); // refresca la copia local (localStorage) como respaldo sin conexión
+}
+
+let _realtimeChannel = null;
+function startRealtimeSync(){
+  if(_realtimeChannel) return;
+  const tables = ['categories','products','clients','reminders','purchases','sales','client_payments',
+    'client_debt_adjustments','consignments','client_returns','client_sales','expenses','losses',
+    'stock_adjustments','cash_counts','calendar_events','calendar_notes','client_product_prices','app_settings'];
+  let ch = sb.channel('almacenpro-sync');
+  tables.forEach(t=>{ ch = ch.on('postgres_changes', {event:'*', schema:'public', table:t}, handleRemoteChange); });
+  ch.subscribe();
+  _realtimeChannel = ch;
+}
+function stopRealtimeSync(){
+  if(_realtimeChannel){ sb.removeChannel(_realtimeChannel); _realtimeChannel = null; }
+}
+let _remoteReloadTimer = null;
+function handleRemoteChange(payload){
+  if(_syncBusy) return; // es muy probablemente nuestro propio cambio reflejándose
+  clearTimeout(_remoteReloadTimer);
+  _remoteReloadTimer = setTimeout(async ()=>{
+    await syncPullAll();
+    renderView();
+    toast('Datos actualizados');
+  }, 800);
 }
 
 /* ---------------- APP CORE ---------------- */
