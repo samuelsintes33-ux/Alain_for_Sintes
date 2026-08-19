@@ -715,67 +715,83 @@ async function syncInsertOnlyTable(table, items, mapFn){
   return true;
 }
 
+let _syncMutex = Promise.resolve(); // asegura que nunca se crucen una subida y una bajada de datos
+function withSyncLock(fn){
+  const run = _syncMutex.then(()=>fn());
+  _syncMutex = run.catch(()=>{});
+  return run;
+}
+
 async function syncPush(){
   if(!app.userId) return;
   if(_syncBusy){ _syncPending = true; return; }
   _syncBusy = true;
-  _lastPushAt = Date.now();
-  try{
-    await syncUpsertTable('categories', DB.categories, c=>({id:c.id, name:c.name, data:c}));
-    await syncUpsertTable('products', DB.products, p=>({id:p.id, category_id:p.catId||null, subcategory_id:p.subId||null, name:p.name, cost_price:p.costPrice||0, stock:p.stock||0, min_stock:p.minStock||0, data:p}));
-    await syncUpsertTable('clients', DB.clients, c=>({id:c.id, name:c.name, phone:c.phone||null, description:c.desc||'', data:c}));
-    await syncUpsertTable('reminders', DB.reminders, r=>({id:r.id, title:r.title, date:r.date, note:null, done:!!r.done, data:r}));
-
-    await syncInsertOnlyTable('purchases', DB.purchases, pu=>({id:pu.id, date:pu.date, supplier:pu.supplier||null, invoice_no:pu.invoiceNo||null, total:pu.total||0, usd_rate_at_purchase:pu.usdRateAtSale||null, created_by:app.userId, data:pu}));
-    await syncInsertOnlyTable('sales', DB.sales, s=>({id:s.id, date:s.date, client_id:s.clientId||null, payment:s.payment, total:s.total||0, created_by:app.userId, data:s}));
-    await syncInsertOnlyTable('client_payments', DB.clientPayments, p=>({id:p.id, client_id:p.clientId, amount:p.amount, note:p.note||null, date:p.date, created_by:app.userId, data:p}));
-    await syncInsertOnlyTable('client_debt_adjustments', DB.clientDebtAdjustments, a=>({id:a.id, client_id:a.clientId, amount:a.amount, note:a.note||null, date:a.date, created_by:app.userId, data:a}));
-    await syncInsertOnlyTable('consignments', DB.consignments, c=>({id:c.id, client_id:c.clientId, date:c.date, created_by:app.userId, data:c}));
-    await syncInsertOnlyTable('client_returns', DB.clientReturns, r=>({id:r.id, client_id:r.clientId, date:r.date, created_by:app.userId, data:r}));
-    await syncInsertOnlyTable('client_sales', DB.clientSales, s=>({id:s.id, client_id:s.clientId, date:s.date, total:s.total||0, created_by:app.userId, data:s}));
-    await syncInsertOnlyTable('expenses', DB.expenses, e=>({id:e.id, date:e.date, concept:e.concept, amount:e.amount, type:e.type||null, category:e.category||null, created_by:app.userId, data:e}));
-    await syncInsertOnlyTable('losses', DB.losses, l=>({id:l.id, product_id:l.productId||null, qty:l.qty, reason:l.reason||null, date:l.date, cost_impact:l.costImpact||0, created_by:app.userId, data:l}));
-    await syncInsertOnlyTable('stock_adjustments', DB.stockAdjustments, a=>({id:a.id, product_id:a.productId||null, delta:a.delta, reason:a.reason||null, ts:a.ts, created_by:app.userId, data:a}));
-    await syncInsertOnlyTable('cash_counts', DB.cashCounts, c=>({id:c.id, date:c.date, denoms:c.denoms||{}, total:c.total||0, created_by:app.userId, data:c}));
-    await syncInsertOnlyTable('calendar_events', DB.events, e=>({id:e.id, date:e.date, title:e.title, created_by:app.userId, data:e}));
-    await syncInsertOnlyTable('calendar_notes', DB.notes, n=>({id:n.id, date:n.date, text:n.text, created_by:app.userId, data:n}));
-
-    // precios congelados por cliente (dict "clienteId::productoId" -> precio)
-    const cppRows = Object.keys(DB.clientProductPrices||{}).map(k=>{
-      const [clientId, productId] = k.split('::');
-      return { key:k, client_id:clientId, product_id:productId, price:DB.clientProductPrices[k] };
-    });
-    if(cppRows.length){
-      const { error } = await sb.from('client_product_prices').upsert(cppRows.map(r=>({client_id:r.client_id, product_id:r.product_id, price:r.price})), {onConflict:'client_id,product_id'});
-      if(!error) cppRows.forEach(r=>_syncedCpp.add(r.key));
+  return withSyncLock(async ()=>{
+    _lastPushAt = Date.now();
+    try{
+      await Promise.all([
+        syncUpsertTable('categories', DB.categories, c=>({id:c.id, name:c.name, data:c})),
+        syncUpsertTable('products', DB.products, p=>({id:p.id, category_id:p.catId||null, subcategory_id:p.subId||null, name:p.name, cost_price:p.costPrice||0, stock:p.stock||0, min_stock:p.minStock||0, data:p})),
+        syncUpsertTable('clients', DB.clients, c=>({id:c.id, name:c.name, phone:c.phone||null, description:c.desc||'', data:c})),
+        syncUpsertTable('reminders', DB.reminders, r=>({id:r.id, title:r.title, date:r.date, note:null, done:!!r.done, data:r})),
+        syncInsertOnlyTable('purchases', DB.purchases, pu=>({id:pu.id, date:pu.date, supplier:pu.supplier||null, invoice_no:pu.invoiceNo||null, total:pu.total||0, usd_rate_at_purchase:pu.usdRateAtSale||null, created_by:app.userId, data:pu})),
+        syncInsertOnlyTable('sales', DB.sales, s=>({id:s.id, date:s.date, client_id:s.clientId||null, payment:s.payment, total:s.total||0, created_by:app.userId, data:s})),
+        syncInsertOnlyTable('client_payments', DB.clientPayments, p=>({id:p.id, client_id:p.clientId, amount:p.amount, note:p.note||null, date:p.date, created_by:app.userId, data:p})),
+        syncInsertOnlyTable('client_debt_adjustments', DB.clientDebtAdjustments, a=>({id:a.id, client_id:a.clientId, amount:a.amount, note:a.note||null, date:a.date, created_by:app.userId, data:a})),
+        syncInsertOnlyTable('consignments', DB.consignments, c=>({id:c.id, client_id:c.clientId, date:c.date, created_by:app.userId, data:c})),
+        syncInsertOnlyTable('client_returns', DB.clientReturns, r=>({id:r.id, client_id:r.clientId, date:r.date, created_by:app.userId, data:r})),
+        syncInsertOnlyTable('client_sales', DB.clientSales, s=>({id:s.id, client_id:s.clientId, date:s.date, total:s.total||0, created_by:app.userId, data:s})),
+        syncInsertOnlyTable('expenses', DB.expenses, e=>({id:e.id, date:e.date, concept:e.concept, amount:e.amount, type:e.type||null, category:e.category||null, created_by:app.userId, data:e})),
+        syncInsertOnlyTable('losses', DB.losses, l=>({id:l.id, product_id:l.productId||null, qty:l.qty, reason:l.reason||null, date:l.date, cost_impact:l.costImpact||0, created_by:app.userId, data:l})),
+        syncInsertOnlyTable('stock_adjustments', DB.stockAdjustments, a=>({id:a.id, product_id:a.productId||null, delta:a.delta, reason:a.reason||null, ts:a.ts, created_by:app.userId, data:a})),
+        syncInsertOnlyTable('cash_counts', DB.cashCounts, c=>({id:c.id, date:c.date, denoms:c.denoms||{}, total:c.total||0, created_by:app.userId, data:c})),
+        syncInsertOnlyTable('calendar_events', DB.events, e=>({id:e.id, date:e.date, title:e.title, created_by:app.userId, data:e})),
+        syncInsertOnlyTable('calendar_notes', DB.notes, n=>({id:n.id, date:n.date, text:n.text, created_by:app.userId, data:n})),
+        (async ()=>{
+          // precios congelados por cliente (dict "clienteId::productoId" -> precio)
+          const cppRows = Object.keys(DB.clientProductPrices||{}).map(k=>{
+            const [clientId, productId] = k.split('::');
+            return { key:k, client_id:clientId, product_id:productId, price:DB.clientProductPrices[k] };
+          });
+          if(cppRows.length){
+            const { error } = await sb.from('client_product_prices').upsert(cppRows.map(r=>({client_id:r.client_id, product_id:r.product_id, price:r.price})), {onConflict:'client_id,product_id'});
+            if(!error) cppRows.forEach(r=>_syncedCpp.add(r.key));
+          }
+          const currentCppKeys = new Set(cppRows.map(r=>r.key));
+          const cppToDelete = [..._syncedCpp].filter(k=>!currentCppKeys.has(k));
+          for(const k of cppToDelete){
+            const [clientId, productId] = k.split('::');
+            await sb.from('client_product_prices').delete().eq('client_id', clientId).eq('product_id', productId);
+            _syncedCpp.delete(k);
+          }
+        })(),
+        (async ()=>{
+          // configuración del negocio (una sola fila). OJO: la personalización visual (tema, tamaño
+          // de letra, notificaciones activadas) NO se manda aquí — esa es cosa de cada dispositivo.
+          const s = DB.settings;
+          await sb.from('app_settings').upsert({
+            id:1, biz_name:DB.meta.bizName||'Mi Negocio', currency_symbol:DB.meta.currency||'$',
+            usd_rate:s.usdRate||0, usd_rate_updated:s.usdRateUpdated||'', eltoque_api_key:s.eltoqueApiKey||null,
+            low_stock_threshold:s.defaultMinStock||5, transfer_fee_percent:s.transferSurchargePct||0,
+            cash_denoms:s.cashDenoms||[], default_min_stock:s.defaultMinStock||5, qty_steps:s.qtySteps||[],
+            transfer_surcharge_pct:s.transferSurchargePct||0, vendor_permissions:s.vendorPermissions||{},
+            invoice_counter:DB.invoiceCounter||1001, sale_counter:DB.saleCounter||1001, admin_password:s.adminPassword||null,
+            updated_at:new Date().toISOString()
+          }, {onConflict:'id'});
+        })()
+      ]);
+      _lastPushAt = Date.now(); // se vuelve a marcar al terminar, por si tardó
+    } finally {
+      _syncBusy = false;
+      if(_syncPending){ _syncPending = false; syncPush(); }
     }
-    const currentCppKeys = new Set(cppRows.map(r=>r.key));
-    const cppToDelete = [..._syncedCpp].filter(k=>!currentCppKeys.has(k));
-    for(const k of cppToDelete){
-      const [clientId, productId] = k.split('::');
-      await sb.from('client_product_prices').delete().eq('client_id', clientId).eq('product_id', productId);
-      _syncedCpp.delete(k);
-    }
-
-    // configuración general (una sola fila)
-    const s = DB.settings;
-    await sb.from('app_settings').upsert({
-      id:1, biz_name:DB.meta.bizName||'Mi Negocio', currency_symbol:DB.meta.currency||'$',
-      usd_rate:s.usdRate||0, usd_rate_updated:s.usdRateUpdated||'', eltoque_api_key:s.eltoqueApiKey||null,
-      low_stock_threshold:s.defaultMinStock||5, transfer_fee_percent:s.transferSurchargePct||0,
-      font_scale:s.fontScale||1, theme:s.theme||'verde', theme_mode:s.themeMode||'light', accent_override:s.accentOverride||null,
-      cash_denoms:s.cashDenoms||[], default_min_stock:s.defaultMinStock||5, qty_steps:s.qtySteps||[],
-      transfer_surcharge_pct:s.transferSurchargePct||0, notif_enabled:!!s.notifEnabled, vendor_permissions:s.vendorPermissions||{},
-      invoice_counter:DB.invoiceCounter||1001, sale_counter:DB.saleCounter||1001, admin_password:s.adminPassword||null,
-      updated_at:new Date().toISOString()
-    }, {onConflict:'id'});
-  } finally {
-    _syncBusy = false;
-    if(_syncPending){ _syncPending = false; syncPush(); }
-  }
+  });
 }
 
 async function syncPullAll(){
+  return withSyncLock(_syncPullAllInner);
+}
+async function _syncPullAllInner(){
   const [cats, prods, clis, rems, purs, sals, cpays, cadjs, cons, crets, csals, exps, loss, sadj, ccnt, cevt, cnote, cpp, settingsRes] = await Promise.all([
     sb.from('categories').select('data'),
     sb.from('products').select('data'),
@@ -832,11 +848,12 @@ async function syncPullAll(){
   const st = settingsRes.data;
   if(st){
     DB.meta.bizName = st.biz_name; DB.meta.currency = st.currency_symbol;
+    // fontScale, theme, themeMode, accentOverride y notifEnabled son personalización de ESTE
+    // dispositivo — nunca se traen de la nube, para que cada teléfono conserve la suya.
     Object.assign(DB.settings, {
       usdRate:st.usd_rate, usdRateUpdated:st.usd_rate_updated, eltoqueApiKey:st.eltoque_api_key||'',
       defaultMinStock:st.default_min_stock, transferSurchargePct:st.transfer_surcharge_pct,
-      fontScale:st.font_scale, theme:st.theme, themeMode:st.theme_mode, accentOverride:st.accent_override,
-      cashDenoms:st.cash_denoms, qtySteps:st.qty_steps, notifEnabled:st.notif_enabled,
+      cashDenoms:st.cash_denoms, qtySteps:st.qty_steps,
       vendorPermissions:st.vendor_permissions, adminPassword:st.admin_password||''
     });
     DB.invoiceCounter = st.invoice_counter; DB.saleCounter = st.sale_counter;
@@ -868,6 +885,12 @@ function handleRemoteChange(payload){
     await syncPullAll();
     const active = document.activeElement;
     const isTyping = active && (active.tagName==='INPUT' || active.tagName==='TEXTAREA');
+    checkDueReminders();
+    checkLowStockAlerts();
+    if('Notification' in window && Notification.permission==='granted'){
+      try{ new Notification('🔄 AlmacénPro', {body:'Otro dispositivo actualizó los datos', tag:'sync-update'}); }catch(e){}
+      playPingSound();
+    }
     if(isTyping){
       toast('Hay cambios de otro usuario. Se mostrarán al salir de este formulario.');
     } else {
@@ -2429,6 +2452,7 @@ function saveClientForm(){
   }
   save();
   ui.closePicker();
+  toast(window._clientFormEditId ? 'Cliente actualizado' : 'Cliente agregado');
   const cb = window._clientFormOnSave;
   if(cb) cb(c);
   else if(document.getElementById('clientsListWrap')) renderClientsList();
@@ -3053,10 +3077,84 @@ function viewReminders(){
   html += `</div>`;
   return html;
 }
+let _audioCtx = null;
+function getAudioCtx(){
+  if(!_audioCtx){
+    try{ _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){ return null; }
+  }
+  if(_audioCtx.state==='suspended') _audioCtx.resume();
+  return _audioCtx;
+}
+function beep(ctx, whenOffset, freq, duration, volume){
+  const osc = ctx.createOscillator(), gain = ctx.createGain();
+  osc.type = 'sine'; osc.frequency.value = freq;
+  const t0 = ctx.currentTime + whenOffset;
+  gain.gain.setValueAtTime(0.0001, t0);
+  gain.gain.exponentialRampToValueAtTime(volume, t0+0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0+duration);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(t0); osc.stop(t0+duration+0.05);
+}
+function playAlarmSound(){
+  const ctx = getAudioCtx();
+  if(!ctx) return;
+  [0, 0.45, 0.9].forEach(off=>{ beep(ctx, off, 880, 0.3, 0.3); beep(ctx, off+0.15, 660, 0.2, 0.25); });
+  if(navigator.vibrate) navigator.vibrate([250,120,250,120,250]);
+}
+function playPingSound(){
+  const ctx = getAudioCtx();
+  if(!ctx) return;
+  beep(ctx, 0, 740, 0.22, 0.18);
+  if(navigator.vibrate) navigator.vibrate(120);
+}
+function urlBase64ToUint8Array(base64String){
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g,'+').replace(/_/g,'/');
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+async function subscribeToPush(){
+  if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  if(!app.userId) return;
+  try{
+    const { data: cfg, error: cfgErr } = await sb.from('push_public_config').select('vapid_public_key').eq('id',1).single();
+    if(cfgErr || !cfg) { console.error('No se pudo leer la clave pública VAPID', cfgErr); return; }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if(!sub){
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(cfg.vapid_public_key)
+      });
+    }
+    const json = sub.toJSON();
+    await sb.from('push_subscriptions').upsert({
+      user_id: app.userId, endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth
+    }, {onConflict:'endpoint'});
+  }catch(err){
+    console.error('Error suscribiendo a push:', err);
+  }
+}
+async function sendPushToOthers(title, message, tag){
+  if(!app.userId) return;
+  try{
+    const { data: { session } } = await sb.auth.getSession();
+    await fetch(SUPABASE_URL + '/functions/v1/send-push', {
+      method:'POST',
+      headers:{ 'Authorization':'Bearer '+(session ? session.access_token : SUPABASE_ANON_KEY), 'Content-Type':'application/json' },
+      body: JSON.stringify({ title, message, tag, exclude_user_id: app.userId })
+    });
+  }catch(err){
+    console.error('Error enviando push:', err);
+  }
+}
 function requestNotifPermission(){
   if(!('Notification' in window)) return;
   Notification.requestPermission().then(perm=>{
     DB.settings.notifEnabled = (perm==='granted');
+    if(perm==='granted'){ getAudioCtx(); subscribeToPush(); } // "desbloquea" el audio aprovechando este gesto del usuario
     save();
     renderView();
   });
@@ -3075,7 +3173,7 @@ function openReminderForm(){
 function saveReminder(){
   const title = document.getElementById('rmTitle').value.trim();
   if(!title) return toast('Escribe qué tienes que hacer');
-  DB.reminders.push({id:uid(), title, date:document.getElementById('rmDate').value||todayISO(), time:document.getElementById('rmTime').value||'', done:false, notified:false});
+  DB.reminders.push({id:uid(), title, date:document.getElementById('rmDate').value||todayISO(), time:document.getElementById('rmTime').value||'', done:false});
   save(); ui.closeSheet(); toast('Recordatorio guardado'); renderView();
 }
 function toggleReminder(id){
@@ -3087,20 +3185,47 @@ function removeReminder(id){
   DB.reminders = DB.reminders.filter(r=>r.id!==id);
   save(); renderView();
 }
+/* Estos avisos son por dispositivo (no se sincronizan): cada celular con la app abierta
+   y notificaciones activadas debe recibir su propio aviso, sin depender de si otro
+   dispositivo ya lo mostró. */
+function _localNotifSet(key){
+  try{ return new Set(JSON.parse(localStorage.getItem(key)||'[]')); }catch(e){ return new Set(); }
+}
+function _saveLocalNotifSet(key, set){
+  try{ localStorage.setItem(key, JSON.stringify([...set])); }catch(e){}
+}
 function checkDueReminders(){
   if(!('Notification' in window) || Notification.permission!=='granted') return;
+  const notifiedIds = _localNotifSet('almacenpro_notified_reminders_v1');
   let changed = false;
   (DB.reminders||[]).forEach(r=>{
-    if(r.done || r.notified) return;
+    if(r.done || notifiedIds.has(r.id)) return;
     if(isReminderDue(r)){
-      try{ new Notification('⏰ '+r.title, {body:'Recordatorio de AlmacénPro', tag:r.id}); }catch(e){}
-      r.notified = true; changed = true;
+      try{ new Notification('⏰ '+r.title, {body:'Recordatorio de AlmacénPro', tag:'rem-'+r.id}); }catch(e){}
+      playAlarmSound();
+      notifiedIds.add(r.id); changed = true;
     }
   });
-  if(changed) save();
+  if(changed) _saveLocalNotifSet('almacenpro_notified_reminders_v1', notifiedIds);
 }
-setInterval(checkDueReminders, 60000);
+function checkLowStockAlerts(){
+  if(!('Notification' in window) || Notification.permission!=='granted') return;
+  const alertedIds = _localNotifSet('almacenpro_alerted_lowstock_v1');
+  let changed = false;
+  const low = activeProducts().filter(p=>p.stock<=p.minStock);
+  const lowIds = new Set(low.map(p=>p.id));
+  low.forEach(p=>{
+    if(alertedIds.has(p.id)) return;
+    try{ new Notification('⚠️ Stock bajo: '+p.name, {body:'Quedan '+p.stock+' unidades (mínimo '+p.minStock+')', tag:'stock-'+p.id}); }catch(e){}
+    alertedIds.add(p.id); changed = true;
+  });
+  // si el producto se repuso por encima del mínimo, se vuelve a avisar la próxima vez que baje
+  [...alertedIds].forEach(id=>{ if(!lowIds.has(id)){ alertedIds.delete(id); changed = true; } });
+  if(changed) _saveLocalNotifSet('almacenpro_alerted_lowstock_v1', alertedIds);
+}
+setInterval(()=>{ checkDueReminders(); checkLowStockAlerts(); }, 60000);
 checkDueReminders();
+checkLowStockAlerts();
 
 /* =========================================================
    PÉRDIDAS DE PRODUCTOS (mermas, daños, robos, vencidos)
@@ -3395,36 +3520,25 @@ function removeQtyStep(i){
 }
 async function fetchEltoqueRate(){
   const key = (DB.settings.eltoqueApiKey||'').trim();
-  if(!key){ toast('Ingresa tu clave de API de elTOQUE primero'); return; }
+  if(!key){ toast('Ingresa tu clave de API de elTOQUE primero y guárdala'); return; }
+  if(!app.userId){ toast('Necesitas sesión iniciada para actualizar la tasa'); return; }
   toast('Consultando elTOQUE...');
   try{
-    const now = new Date();
-    const pad = n=>String(n).padStart(2,'0');
-    const dateStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-    const res = await fetch('https://tasas.eltoque.com/v1/trmi', {
+    const { data: { session } } = await sb.auth.getSession();
+    const res = await fetch(SUPABASE_URL + '/functions/v1/update-usd-rate', {
       method: 'POST',
-      headers: {
-        'Authorization': 'Bearer '+key,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({date_from: dateStr, date_to: dateStr})
+      headers: { 'Authorization': 'Bearer '+session.access_token }
     });
-    if(!res.ok){
-      let bodyText = '';
-      try{ bodyText = await res.text(); }catch(e){}
-      throw new Error('HTTP '+res.status+(bodyText?(' — '+bodyText.slice(0,150)):''));
-    }
-    const data = await res.json();
-    const usd = data && data.tasas && data.tasas.USD;
-    if(!usd) throw new Error('Respuesta sin campo tasas.USD: '+JSON.stringify(data).slice(0,150));
-    DB.settings.usdRate = usd;
-    DB.settings.usdRateUpdated = 'elTOQUE · '+todayISO();
+    const body = await res.json();
+    if(!res.ok) throw new Error(body.error || ('HTTP '+res.status));
+    DB.settings.usdRate = body.usd_rate;
+    DB.settings.usdRateUpdated = 'elTOQUE · '+body.updated;
     save();
-    toast('Tasa actualizada: 1 USD = '+usd+' '+DB.meta.currency);
+    toast('Tasa actualizada: 1 USD = '+body.usd_rate+' '+DB.meta.currency);
     renderView();
   }catch(err){
     console.error('Error consultando elTOQUE:', err);
-    toast('No se pudo conectar: '+(err.message||err)+'. Revisa la consola (F12) para más detalle.');
+    toast('No se pudo actualizar: '+(err.message||err));
   }
 }
 
