@@ -12,6 +12,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="icon" href="icon.png">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
 :root{
   --bg:#F5F2EA;
@@ -284,20 +285,20 @@ hr.sep{border:none;border-top:1px solid var(--border);margin:14px 0;}
   <div class="login-card">
     <div class="login-mark">A</div>
     <div class="login-title" id="loginBizName">AlmacénPro</div>
-    <div class="login-sub">Elige cómo vas a entrar</div>
-    <div class="role-grid">
-      <div class="role-btn" onclick="app.login('admin')">
-        <div class="role-icon">🗝️</div>
-        <div class="role-label">Administrador</div>
-        <div class="role-desc">Acceso total</div>
-      </div>
-      <div class="role-btn" onclick="app.login('vendedor')">
-        <div class="role-icon">🛒</div>
-        <div class="role-label">Vendedor</div>
-        <div class="role-desc">Solo ventas y consulta</div>
-      </div>
+    <div class="login-sub" id="authModeLabel">Inicia sesión para continuar</div>
+
+    <div class="field" style="text-align:left"><label>Correo</label><input type="email" id="authEmail" placeholder="tucorreo@ejemplo.com" autocomplete="email"></div>
+    <div class="field" style="text-align:left" id="authNameField"><label>Tu nombre</label><input type="text" id="authName" placeholder="Como quieres que te vean"></div>
+    <div class="field" style="text-align:left"><label>Contraseña</label><input type="password" id="authPassword" placeholder="••••••••" autocomplete="current-password"></div>
+
+    <div class="small muted" id="authError" style="color:var(--danger);margin-bottom:8px;min-height:16px"></div>
+
+    <button class="btn btn-primary btn-block" id="authSubmitBtn" onclick="authSubmit()">Entrar</button>
+    <div class="small" style="margin-top:12px">
+      <a href="#" id="authToggleLink" onclick="toggleAuthMode();return false;">¿Primera vez? Crear cuenta</a>
     </div>
-    <div class="login-footer">AlmacénPro · datos guardados en este dispositivo</div>
+
+    <div class="login-footer">AlmacénPro · sincronizado en la nube</div>
   </div>
 </div>
 
@@ -578,6 +579,91 @@ function checkAdminPassword(){
   }
 }
 
+/* ---------------- SUPABASE: conexión y autenticación ---------------- */
+const SUPABASE_URL = 'https://wrebpmynlngqhdmklnhw.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndyZWJwbXlubG5ncWhkbWtsbmh3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcwNjE4NzcsImV4cCI6MjEwMjYzNzg3N30.FhDfNEQLU1nSENJiHK8DkEQyeRBEImlu-3m8ZmQGCqs';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let _authMode = 'signin'; // 'signin' | 'signup'
+function toggleAuthMode(){
+  _authMode = _authMode==='signin' ? 'signup' : 'signin';
+  document.getElementById('authNameField').style.display = _authMode==='signup' ? 'block' : 'none';
+  document.getElementById('authModeLabel').textContent = _authMode==='signup' ? 'Crea tu cuenta' : 'Inicia sesión para continuar';
+  document.getElementById('authSubmitBtn').textContent = _authMode==='signup' ? 'Crear cuenta' : 'Entrar';
+  document.getElementById('authToggleLink').textContent = _authMode==='signup' ? '¿Ya tienes cuenta? Inicia sesión' : '¿Primera vez? Crear cuenta';
+  document.getElementById('authError').textContent = '';
+}
+// estado inicial: campo de nombre oculto (modo entrar)
+document.addEventListener('DOMContentLoaded', ()=>{
+  const nf = document.getElementById('authNameField');
+  if(nf) nf.style.display = 'none';
+});
+
+async function authSubmit(){
+  const email = (document.getElementById('authEmail').value||'').trim();
+  const password = document.getElementById('authPassword').value||'';
+  const errEl = document.getElementById('authError');
+  errEl.textContent = '';
+  if(!email || !password){ errEl.textContent = 'Escribe correo y contraseña'; return; }
+  const btn = document.getElementById('authSubmitBtn');
+  btn.disabled = true;
+  const originalLabel = btn.textContent;
+  btn.textContent = 'Un momento...';
+  try{
+    if(_authMode==='signup'){
+      const name = (document.getElementById('authName').value||'').trim();
+      if(!name){ errEl.textContent = 'Escribe tu nombre'; return; }
+      const { data, error } = await sb.auth.signUp({ email, password, options:{ data:{ name } } });
+      if(error) throw error;
+      if(data.session){
+        await afterAuthSuccess();
+      } else {
+        errEl.style.color = 'var(--ok)';
+        errEl.textContent = 'Cuenta creada. Si tu proyecto pide confirmación por correo, revisa tu email antes de entrar.';
+      }
+    } else {
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
+      if(error) throw error;
+      await afterAuthSuccess();
+    }
+  }catch(err){
+    errEl.style.color = 'var(--danger)';
+    errEl.textContent = traduceAuthError(err.message||String(err));
+  }finally{
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
+}
+function traduceAuthError(msg){
+  const m = msg.toLowerCase();
+  if(m.includes('invalid login credentials')) return 'Correo o contraseña incorrectos';
+  if(m.includes('user already registered')) return 'Ya existe una cuenta con ese correo, mejor inicia sesión';
+  if(m.includes('password should be at least')) return 'La contraseña debe tener al menos 6 caracteres';
+  if(m.includes('failed to fetch')) return 'No se pudo conectar. Revisa tu conexión a internet.';
+  return msg;
+}
+async function afterAuthSuccess(){
+  const { data: { user } } = await sb.auth.getUser();
+  if(!user) return;
+  const { data: profile, error } = await sb.from('profiles').select('name, role').eq('id', user.id).single();
+  if(error || !profile){
+    document.getElementById('authError').textContent = 'No se pudo cargar tu perfil. Intenta de nuevo.';
+    return;
+  }
+  app.userId = user.id;
+  app.userName = profile.name;
+  app._doLogin(profile.role);
+}
+async function checkExistingSession(){
+  const { data: { session } } = await sb.auth.getSession();
+  if(session){
+    await afterAuthSuccess();
+  }
+}
+async function supabaseSignOut(){
+  await sb.auth.signOut();
+}
+
 /* ---------------- APP CORE ---------------- */
 const app = {
   role: null,
@@ -605,7 +691,10 @@ const app = {
     window.scrollTo(0,0);
   },
   logout(){
+    supabaseSignOut();
     this.role = null;
+    this.userId = null;
+    this.userName = null;
     document.getElementById('screen-main').classList.remove('active');
     document.getElementById('screen-login').classList.add('active');
     document.getElementById('loginBizName').textContent = DB.meta.bizName || 'AlmacénPro';
@@ -768,6 +857,7 @@ function renderView(){
 }
 window.addEventListener('DOMContentLoaded', ()=>{
   document.getElementById('loginBizName').textContent = DB.meta.bizName || 'AlmacénPro';
+  checkExistingSession();
 });
 
 /* =========================================================
