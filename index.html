@@ -443,6 +443,10 @@ function save(){
   catch(e){ toast('No se pudo guardar (memoria llena)'); }
   if(app.userId) syncPush().catch(err=>console.error('Error sincronizando:', err));
 }
+function saveLocalOnly(){
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
+  catch(e){}
+}
 
 /* ---------------- STOCK BASADO EN HISTORIAL (evita conflictos al sincronizar) ---------------- */
 function deviceShort(){ return (DB.deviceId||'XXXX').slice(-4).toUpperCase(); }
@@ -680,7 +684,7 @@ async function supabaseSignOut(){
 // Tablas "de historial": nunca se editan ni se borran -> solo se insertan las filas nuevas (mucho más ligero).
 const _syncedIds = {}; // tabla -> Set de ids que sabemos que ya existen en Supabase
 let _syncedCpp = new Set(); // claves "clientId::productId" ya sincronizadas
-let _syncBusy = false, _syncPending = false, _syncBooted = false;
+let _syncBusy = false, _syncPending = false, _syncBooted = false, _lastPushAt = 0;
 
 function markSynced(table, id){ (_syncedIds[table] || (_syncedIds[table]=new Set())).add(id); }
 
@@ -715,6 +719,7 @@ async function syncPush(){
   if(!app.userId) return;
   if(_syncBusy){ _syncPending = true; return; }
   _syncBusy = true;
+  _lastPushAt = Date.now();
   try{
     await syncUpsertTable('categories', DB.categories, c=>({id:c.id, name:c.name, data:c}));
     await syncUpsertTable('products', DB.products, p=>({id:p.id, category_id:p.catId||null, subcategory_id:p.subId||null, name:p.name, cost_price:p.costPrice||0, stock:p.stock||0, min_stock:p.minStock||0, data:p}));
@@ -837,7 +842,7 @@ async function syncPullAll(){
     DB.invoiceCounter = st.invoice_counter; DB.saleCounter = st.sale_counter;
   }
   recomputeStock();
-  save(); // refresca la copia local (localStorage) como respaldo sin conexión
+  saveLocalOnly(); // refresca la copia local (localStorage) como respaldo sin conexión; nunca vuelve a empujar a Supabase (evitaría un bucle infinito con Realtime)
 }
 
 let _realtimeChannel = null;
@@ -857,11 +862,18 @@ function stopRealtimeSync(){
 let _remoteReloadTimer = null;
 function handleRemoteChange(payload){
   if(_syncBusy) return; // es muy probablemente nuestro propio cambio reflejándose
+  if(Date.now() - _lastPushAt < 3000) return; // eco de algo que acabamos de subir nosotros mismos
   clearTimeout(_remoteReloadTimer);
   _remoteReloadTimer = setTimeout(async ()=>{
     await syncPullAll();
-    renderView();
-    toast('Datos actualizados');
+    const active = document.activeElement;
+    const isTyping = active && (active.tagName==='INPUT' || active.tagName==='TEXTAREA');
+    if(isTyping){
+      toast('Hay cambios de otro usuario. Se mostrarán al salir de este formulario.');
+    } else {
+      renderView();
+      toast('Datos actualizados');
+    }
   }, 800);
 }
 
