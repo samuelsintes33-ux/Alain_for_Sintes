@@ -109,6 +109,9 @@ img{max-width:100%;display:block;}
   display:flex;align-items:center;justify-content:center;font-size:calc(16px * var(--font-scale));cursor:pointer;
 }
 .icon-btn:active{background:rgba(255,255,255,.24);}
+.icon-btn:disabled{opacity:.3;cursor:default;}
+.icon-btn:disabled:active{background:rgba(255,255,255,.12);}
+.topbar-right{display:flex;gap:6px;align-items:center;}
 
 #view-container{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
 
@@ -313,6 +316,8 @@ hr.sep{border:none;border-top:1px solid var(--border);margin:14px 0;}
       </div>
     </div>
     <div class="topbar-right">
+      <button class="icon-btn" id="btnUndo" onclick="doUndo()" title="Deshacer" disabled>↶</button>
+      <button class="icon-btn" id="btnRedo" onclick="doRedo()" title="Rehacer" disabled>↷</button>
       <button class="icon-btn" onclick="app.logout()" title="Cambiar modo">⇄</button>
     </div>
   </div>
@@ -439,9 +444,64 @@ function load(){
     return mergeWithDefaults(d);
   }catch(e){ return defaultDB(); }
 }
+/* ---------------- DESHACER / REHACER (por dispositivo, solo de esta sesión) ---------------- */
+let _lastSnapshot = JSON.stringify(DB);
+let _undoStack = [], _redoStack = [];
+const UNDO_LIMIT = 20;
+function pushUndoCheckpoint(){
+  const current = JSON.stringify(DB);
+  if(current === _lastSnapshot) return;
+  _undoStack.push(_lastSnapshot);
+  if(_undoStack.length > UNDO_LIMIT) _undoStack.shift();
+  _redoStack = [];
+  _lastSnapshot = current;
+  updateUndoRedoButtons();
+}
+function resetUndoHistory(){
+  _undoStack = []; _redoStack = [];
+  _lastSnapshot = JSON.stringify(DB);
+  updateUndoRedoButtons();
+}
+function updateUndoRedoButtons(){
+  const u = document.getElementById('btnUndo'), r = document.getElementById('btnRedo');
+  if(u) u.disabled = _undoStack.length===0;
+  if(r) r.disabled = _redoStack.length===0;
+}
+function doUndo(){
+  if(!_undoStack.length) return;
+  const current = JSON.stringify(DB);
+  const prev = _undoStack.pop();
+  _redoStack.push(current);
+  if(_redoStack.length > UNDO_LIMIT) _redoStack.shift();
+  DB = JSON.parse(prev);
+  _lastSnapshot = prev;
+  recomputeStock();
+  save();
+  updateUndoRedoButtons();
+  ui.closeSheet(); ui.closePicker();
+  renderView();
+  toast('Acción deshecha');
+}
+function doRedo(){
+  if(!_redoStack.length) return;
+  const current = JSON.stringify(DB);
+  const next = _redoStack.pop();
+  _undoStack.push(current);
+  if(_undoStack.length > UNDO_LIMIT) _undoStack.shift();
+  DB = JSON.parse(next);
+  _lastSnapshot = next;
+  recomputeStock();
+  save();
+  updateUndoRedoButtons();
+  ui.closeSheet(); ui.closePicker();
+  renderView();
+  toast('Acción rehecha');
+}
+
 function save(){
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
   catch(e){ toast('No se pudo guardar (memoria llena)'); }
+  pushUndoCheckpoint();
   if(app.userId) syncPush().catch(err=>console.error('Error sincronizando:', err));
 }
 function saveLocalOnly(){
@@ -741,6 +801,14 @@ async function syncUpsertTable(table, items, mapFn){
   const currentIds = new Set(items.map(it=>it.id));
   const toDelete = [...set].filter(id=>!currentIds.has(id));
   if(toDelete.length){
+    // Freno de seguridad: si de golpe se van a borrar muchos registros que antes existían
+    // (por ejemplo, al restaurar un archivo viejo o un error), se pregunta antes de borrar
+    // en la nube — eso evita que se pierda de golpe la información de todo el equipo.
+    const massive = toDelete.length>=5 && toDelete.length >= set.size*0.4;
+    if(massive){
+      const ok = confirm('Se van a borrar '+toDelete.length+' de '+set.size+' registros de "'+table+'" en la nube, compartidos con todo el equipo. ¿Seguro que quieres continuar?');
+      if(!ok){ toast('Cancelado: no se borró nada de "'+table+'"'); return true; }
+    }
     const { error } = await sb.from(table).delete().in('id', toDelete);
     if(!error) toDelete.forEach(id=>set.delete(id));
   }
@@ -906,6 +974,7 @@ async function _syncPullAllInner(){
   }
   recomputeStock();
   saveLocalOnly(); // refresca la copia local (localStorage) como respaldo sin conexión; nunca vuelve a empujar a Supabase (evitaría un bucle infinito con Realtime)
+  resetUndoHistory(); // los datos de la nube son el nuevo punto de partida; deshacer no debe cruzar esa frontera
 }
 
 let _realtimeChannel = null;
@@ -4271,25 +4340,43 @@ function applySync(remote, decisions, conflicts){
 document.getElementById('restoreInputHidden').addEventListener('change', function(e){
   const file = e.target.files[0];
   if(!file) return;
-  if(!confirm('Esto reemplazará todos los datos actuales. ¿Continuar?')){ e.target.value=''; return; }
   const reader = new FileReader();
   reader.onload = function(ev){
     try{
-      const data = JSON.parse(ev.target.result);
-      DB = mergeWithDefaults(data);
+      const data = mergeWithDefaults(JSON.parse(ev.target.result));
+      // Ya no reemplaza nada: SOLO agrega lo que no exista todavía (por id). Nunca borra,
+      // así un archivo viejo jamás puede llevarse por delante lo que ya tienes en la nube.
+      let addedCount = 0;
+      ['products','purchases','sales','expenses','cashCounts','notes','events','reminders','losses',
+       'clients','clientPayments','clientDebtAdjustments','consignments','clientReturns','clientSales','orders'
+      ].forEach(key=>{
+        if(!Array.isArray(DB[key]) || !Array.isArray(data[key])) return;
+        const r = mergeById(DB[key], data[key]);
+        DB[key] = r.merged;
+        addedCount += r.added;
+      });
+      const catMap = {}; DB.categories.forEach(c=>catMap[c.id]=c);
+      (data.categories||[]).forEach(c=>{ if(!catMap[c.id]){ DB.categories.push(c); catMap[c.id]=c; } });
       recomputeStock();
       save(); applySettings(); renderView();
-      toast('Datos restaurados');
+      toast(addedCount>0 ? 'Se agregaron '+addedCount+' registro(s) que no tenías. Nada se borró.' : 'Ese archivo no tenía nada nuevo que agregar.');
     }catch(err){ toast('Archivo inválido'); }
   };
   reader.readAsText(file);
   e.target.value='';
 });
 function resetApp(){
-  if(!confirm('Esto borrará TODOS los datos (productos, ventas, compras, etc). ¿Seguro?')) return;
-  if(!confirm('Última confirmación: esta acción no se puede deshacer. ¿Restablecer todo?')) return;
+  if(!app.userId){
+    if(!confirm('Esto borrará TODOS los datos (productos, ventas, compras, etc). ¿Seguro?')) return;
+    if(!confirm('Última confirmación: esta acción no se puede deshacer. ¿Restablecer todo?')) return;
+    DB = defaultDB();
+    save(); applySettings(); toast('Aplicación restablecida'); app.go('home');
+    return;
+  }
+  const typed = prompt('Esto borra TODOS los datos del negocio para TODO EL EQUIPO (no solo este teléfono): productos, ventas, clientes, todo. No se puede deshacer.\n\nEscribe BORRAR TODO para confirmar:');
+  if(typed !== 'BORRAR TODO'){ toast('Cancelado, no se borró nada'); return; }
   DB = defaultDB();
-  save(); applySettings(); toast('Aplicación restablecida'); app.go('home');
+  save(); applySettings(); toast('Aplicación restablecida para todo el equipo'); app.go('home');
 }
 
 applySettings();
