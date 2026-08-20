@@ -895,6 +895,7 @@ async function syncPush(){
     } finally {
       _syncBusy = false;
       if(_syncPending){ _syncPending = false; syncPush(); }
+      else if(_pendingSwUpdate){ tryApplyPendingUpdate(); }
     }
   });
 }
@@ -1007,10 +1008,9 @@ function handleRemoteChange(payload){
       playPingSound();
     }
     if(isTyping){
-      toast('Hay cambios de otro usuario. Se mostrarán al salir de este formulario.');
+      // no interrumpe mientras se escribe; la notificación/sonido de arriba ya avisó igual
     } else {
       renderView();
-      toast('Datos actualizados');
     }
   }, 800);
 }
@@ -3868,6 +3868,13 @@ function viewSettings(){
 
   if(isAdmin){ setTimeout(renderDenomEditList, 0); setTimeout(renderQtyStepsEditList, 0); }
 
+  html += `<div class="section-title">Actualizar la aplicación</div>
+  <div class="card stack">
+    <div class="small muted" style="margin-bottom:2px">Trae la última versión sin borrar nada del teléfono. Antes de actualizar, se descarga automáticamente una copia de seguridad por si acaso.</div>
+    <button class="btn btn-primary btn-block" id="checkUpdateBtn" onclick="checkForUpdate()">🔄 Buscar actualización</button>
+    <div class="small muted mt-2" id="checkUpdateStatus"></div>
+  </div>`;
+
   if(isAdmin){
     html += `<div class="section-title">Sincronizar con otro teléfono</div>
     <div class="card">
@@ -3875,13 +3882,6 @@ function viewSettings(){
       <button class="btn btn-accent btn-block" onclick="exportSyncFile()">📤 Exportar mis cambios</button>
       <button class="btn btn-primary btn-block mt-2" onclick="document.getElementById('syncInputHidden').click()">📥 Sincronizar (archivo recibido)</button>
       <div class="small muted mt-2" id="lastSyncInfo">${DB.lastSyncAt? 'Última sincronización: '+esc(DB.lastSyncAt) : ''}</div>
-    </div>
-
-    <div class="section-title">Actualizar la aplicación</div>
-    <div class="card stack">
-      <div class="small muted" style="margin-bottom:2px">Trae la última versión sin borrar nada del teléfono. Antes de actualizar, se descarga automáticamente una copia de seguridad por si acaso.</div>
-      <button class="btn btn-primary btn-block" id="checkUpdateBtn" onclick="checkForUpdate()">🔄 Buscar actualización</button>
-      <div class="small muted mt-2" id="checkUpdateStatus"></div>
     </div>
 
     <div class="section-title">Restablecer aplicación</div>
@@ -3894,8 +3894,8 @@ function viewSettings(){
     html += `<div class="section-title">Copia de seguridad</div>
     <div class="card stack">
       <button class="btn btn-outline btn-block" onclick="backupData()">⬇️ Descargar copia de seguridad</button>
-      <div class="small muted" style="margin-bottom:2px">Restaurar reemplaza TODOS los datos de este teléfono (úsalo solo para restaurar tu propio respaldo, no para juntar datos de dos personas).</div>
-      <button class="btn btn-outline btn-block" onclick="document.getElementById('restoreInputHidden').click()">⬆️ Restaurar copia completa (reemplaza todo)</button>
+      <div class="small muted" style="margin-bottom:2px">Restaurar SOLO agrega lo que no tengas todavía (por id) — nunca borra ni reemplaza lo que ya tienes, aunque el archivo sea viejo o de otro dispositivo.</div>
+      <button class="btn btn-outline btn-block" onclick="document.getElementById('restoreInputHidden').click()">⬆️ Restaurar copia de seguridad (solo agrega)</button>
     </div>`;
   }
   html += `<div class="small muted" style="text-align:center;margin-top:18px">AlmacénPro · datos guardados solo en este dispositivo</div>`;
@@ -3992,6 +3992,38 @@ function backupData(){
   URL.revokeObjectURL(url);
   toast('Archivo exportado');
 }
+let _pendingSwUpdate = null; // service worker nuevo esperando a que sea seguro activarlo
+async function silentAutoUpdateCheck(){
+  if(!('serviceWorker' in navigator)) return;
+  try{
+    const reg = await navigator.serviceWorker.getRegistration();
+    if(!reg) return;
+    await reg.update();
+    if(reg.waiting){
+      _pendingSwUpdate = reg.waiting;
+      tryApplyPendingUpdate();
+    }
+  }catch(e){ /* sin internet: no pasa nada, se reintenta más tarde */ }
+}
+function tryApplyPendingUpdate(){
+  if(!_pendingSwUpdate) return;
+  if(_syncBusy) return; // nunca cambies el código mientras hay una subida de datos en curso
+  const active = document.activeElement;
+  const isTyping = active && (active.tagName==='INPUT' || active.tagName==='TEXTAREA');
+  if(isTyping) return; // tampoco interrumpas mientras alguien está escribiendo algo
+  const worker = _pendingSwUpdate;
+  _pendingSwUpdate = null;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+    if(reloaded) return;
+    reloaded = true;
+    window.location.reload();
+  }, {once:true});
+  worker.postMessage({type:'SKIP_WAITING'});
+}
+setInterval(silentAutoUpdateCheck, 5*60*1000); // revisa en silencio cada 5 minutos
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ silentAutoUpdateCheck(); tryApplyPendingUpdate(); } });
+
 async function checkForUpdate(){
   if(!('serviceWorker' in navigator)){
     toast('Este navegador no admite actualización automática');
@@ -4001,30 +4033,27 @@ async function checkForUpdate(){
   const status = document.getElementById('checkUpdateStatus');
   if(btn){ btn.disabled = true; btn.textContent = 'Buscando actualización...'; }
   try{
-    // Copia de seguridad SIEMPRE primero, pase lo que pase con la actualización
     backupData();
     if(status) status.textContent = 'Copia de seguridad guardada. Buscando actualización...';
-
     const reg = await navigator.serviceWorker.getRegistration();
     if(!reg){
-      if(status) status.textContent = 'No se encontró el service worker registrado. Recargando...';
-      setTimeout(()=>window.location.reload(), 800);
+      if(status) status.textContent = 'No se encontró el service worker registrado.';
+      if(btn){ btn.disabled=false; btn.textContent='🔄 Buscar actualización'; }
       return;
     }
-
-    let reloaded = false;
-    navigator.serviceWorker.addEventListener('controllerchange', ()=>{
-      if(reloaded) return;
-      reloaded = true;
-      window.location.reload();
-    }, {once:true});
-
     await reg.update();
-    if(reg.waiting){ reg.waiting.postMessage({type:'SKIP_WAITING'}); }
-
-    // Este service worker se auto-activa al instalarse, así que en casi todos los casos
-    // basta con recargar poco después de pedir la actualización.
-    setTimeout(()=>{ if(!reloaded){ window.location.reload(); } }, 1200);
+    if(reg.waiting){
+      _pendingSwUpdate = reg.waiting;
+      if(status) status.textContent = 'Hay una versión nueva. Se aplicará en cuanto no haya nada subiéndose (puede tardar unos segundos)...';
+      const tryLoop = setInterval(()=>{
+        if(!_pendingSwUpdate){ clearInterval(tryLoop); return; }
+        tryApplyPendingUpdate();
+      }, 1000);
+      tryApplyPendingUpdate();
+    } else {
+      if(status) status.textContent = 'Ya tienes la última versión.';
+      if(btn){ btn.disabled=false; btn.textContent='🔄 Buscar actualización'; }
+    }
   }catch(e){
     if(status) status.textContent = 'No se pudo revisar (¿sin internet?). Tu copia de seguridad ya se descargó y tus datos están a salvo.';
     if(btn){ btn.disabled=false; btn.textContent='🔄 Buscar actualización'; }
