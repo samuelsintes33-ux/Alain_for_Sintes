@@ -414,6 +414,7 @@ function defaultDB(){
     clientReturns:[],
     clientSales:[],
     clientProductPrices:{},
+    orders:[],
     settings:{fontScale:1, theme:'verde', themeMode:'light', accentOverride:null, cashDenoms:[1000,500,200,100,50,20,10,5,2,1], usdRate:0, usdRateUpdated:'', defaultMinStock:5, qtySteps:[5,10,20,24], transferSurchargePct:0, notifEnabled:false,
       vendorPermissions:{editInventory:false, reportLosses:false, addClients:false, deleteProducts:false, setUsdRate:false, backupRestore:false}},
     invoiceCounter: 1001,
@@ -593,7 +594,19 @@ function checkAdminPassword(){
 /* ---------------- SUPABASE: conexión y autenticación ---------------- */
 const SUPABASE_URL = 'https://wrebpmynlngqhdmklnhw.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndyZWJwbXlubG5ncWhkbWtsbmh3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcwNjE4NzcsImV4cCI6MjEwMjYzNzg3N30.FhDfNEQLU1nSENJiHK8DkEQyeRBEImlu-3m8ZmQGCqs';
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storage: window.localStorage }
+});
+const CACHED_PROFILE_KEY = 'almacenpro_cached_profile_v1';
+function cacheProfile(userId, userName, role){
+  try{ localStorage.setItem(CACHED_PROFILE_KEY, JSON.stringify({userId, userName, role})); }catch(e){}
+}
+function getCachedProfile(){
+  try{ return JSON.parse(localStorage.getItem(CACHED_PROFILE_KEY)||'null'); }catch(e){ return null; }
+}
+function clearCachedProfile(){
+  try{ localStorage.removeItem(CACHED_PROFILE_KEY); }catch(e){}
+}
 
 let _authMode = 'signin'; // 'signin' | 'signup'
 function toggleAuthMode(){
@@ -663,19 +676,48 @@ async function afterAuthSuccess(){
   }
   app.userId = user.id;
   app.userName = profile.name;
+  cacheProfile(user.id, profile.name, profile.role);
   toast('Sincronizando datos...');
   await syncPullAll();
   startRealtimeSync();
   app._doLogin(profile.role);
+  if((DB.settings.eltoqueApiKey||'').trim()) fetchEltoqueRate(true); // refresco silencioso al entrar
 }
 async function checkExistingSession(){
   const { data: { session } } = await sb.auth.getSession();
-  if(session){
-    await afterAuthSuccess();
+  if(!session) return;
+  const cached = getCachedProfile();
+  if(cached && cached.userId===session.user.id){
+    // entra al instante con lo que ya tenías guardado en este teléfono — no espera a la red,
+    // así el reinicio del celular o quedarte sin internet un momento no te saca de sesión.
+    app.userId = cached.userId;
+    app.userName = cached.userName;
+    app._doLogin(cached.role);
+    refreshSessionInBackground();
+  } else {
+    try{ await afterAuthSuccess(); }
+    catch(err){ console.error('No se pudo validar la sesión existente', err); }
+  }
+}
+async function refreshSessionInBackground(){
+  try{
+    const { data: { user } } = await sb.auth.getUser();
+    if(!user) return;
+    const { data: profile, error } = await sb.from('profiles').select('name, role').eq('id', user.id).single();
+    if(error || !profile) return;
+    cacheProfile(user.id, profile.name, profile.role);
+    if(profile.role !== app.role){ app.role = profile.role; }
+    await syncPullAll();
+    startRealtimeSync();
+    renderView();
+    if((DB.settings.eltoqueApiKey||'').trim()) fetchEltoqueRate(true);
+  }catch(err){
+    console.error('No se pudo sincronizar en segundo plano (¿sin internet?)', err);
   }
 }
 async function supabaseSignOut(){
   stopRealtimeSync();
+  clearCachedProfile();
   await sb.auth.signOut();
 }
 
@@ -734,6 +776,7 @@ async function syncPush(){
         syncUpsertTable('products', DB.products, p=>({id:p.id, category_id:p.catId||null, subcategory_id:p.subId||null, name:p.name, cost_price:p.costPrice||0, stock:p.stock||0, min_stock:p.minStock||0, data:p})),
         syncUpsertTable('clients', DB.clients, c=>({id:c.id, name:c.name, phone:c.phone||null, description:c.desc||'', data:c})),
         syncUpsertTable('reminders', DB.reminders, r=>({id:r.id, title:r.title, date:r.date, note:null, done:!!r.done, data:r})),
+        syncUpsertTable('orders', DB.orders, o=>({id:o.id, client_id:o.clientId||null, status:o.status, created_by:app.userId, updated_at:new Date().toISOString(), data:o})),
         syncInsertOnlyTable('purchases', DB.purchases, pu=>({id:pu.id, date:pu.date, supplier:pu.supplier||null, invoice_no:pu.invoiceNo||null, total:pu.total||0, usd_rate_at_purchase:pu.usdRateAtSale||null, created_by:app.userId, data:pu})),
         syncInsertOnlyTable('sales', DB.sales, s=>({id:s.id, date:s.date, client_id:s.clientId||null, payment:s.payment, total:s.total||0, created_by:app.userId, data:s})),
         syncInsertOnlyTable('client_payments', DB.clientPayments, p=>({id:p.id, client_id:p.clientId, amount:p.amount, note:p.note||null, date:p.date, created_by:app.userId, data:p})),
@@ -792,11 +835,12 @@ async function syncPullAll(){
   return withSyncLock(_syncPullAllInner);
 }
 async function _syncPullAllInner(){
-  const [cats, prods, clis, rems, purs, sals, cpays, cadjs, cons, crets, csals, exps, loss, sadj, ccnt, cevt, cnote, cpp, settingsRes] = await Promise.all([
+  const [cats, prods, clis, rems, ords, purs, sals, cpays, cadjs, cons, crets, csals, exps, loss, sadj, ccnt, cevt, cnote, cpp, settingsRes] = await Promise.all([
     sb.from('categories').select('data'),
     sb.from('products').select('data'),
     sb.from('clients').select('data'),
     sb.from('reminders').select('data'),
+    sb.from('orders').select('data'),
     sb.from('purchases').select('data'),
     sb.from('sales').select('data'),
     sb.from('client_payments').select('data'),
@@ -818,6 +862,7 @@ async function _syncPullAllInner(){
   DB.products = unwrap(prods);
   DB.clients = unwrap(clis);
   DB.reminders = unwrap(rems);
+  DB.orders = unwrap(ords);
   DB.purchases = unwrap(purs);
   DB.sales = unwrap(sals);
   DB.clientPayments = unwrap(cpays);
@@ -838,6 +883,7 @@ async function _syncPullAllInner(){
   const setIds = (table, arr) => { _syncedIds[table] = new Set(arr.map(it=>it.id)); };
   setIds('categories', DB.categories); setIds('products', DB.products); setIds('clients', DB.clients);
   setIds('reminders', DB.reminders); setIds('purchases', DB.purchases); setIds('sales', DB.sales);
+  setIds('orders', DB.orders);
   setIds('client_payments', DB.clientPayments); setIds('client_debt_adjustments', DB.clientDebtAdjustments);
   setIds('consignments', DB.consignments); setIds('client_returns', DB.clientReturns);
   setIds('client_sales', DB.clientSales); setIds('expenses', DB.expenses); setIds('losses', DB.losses);
@@ -865,7 +911,7 @@ async function _syncPullAllInner(){
 let _realtimeChannel = null;
 function startRealtimeSync(){
   if(_realtimeChannel) return;
-  const tables = ['categories','products','clients','reminders','purchases','sales','client_payments',
+  const tables = ['categories','products','clients','reminders','orders','purchases','sales','client_payments',
     'client_debt_adjustments','consignments','client_returns','client_sales','expenses','losses',
     'stock_adjustments','cash_counts','calendar_events','calendar_notes','client_product_prices','app_settings'];
   let ch = sb.channel('almacenpro-sync');
@@ -1038,19 +1084,21 @@ function handleNav(v){
 }
 function highlightNav(){
   document.querySelectorAll('.nav-btn').forEach(b=>{
-    b.classList.toggle('active', b.dataset.v===app.view || (b.dataset.v==='more' && ['purchases','expenses','reports','calendar','settings','reminders','losses','clients','salehistory'].includes(app.view)));
+    b.classList.toggle('active', b.dataset.v===app.view || (b.dataset.v==='more' && ['purchases','expenses','reports','calendar','settings','reminders','losses','clients','salehistory','orders'].includes(app.view)));
   });
   const titles = {home:'Inicio', inventory:'Inventario', sales:'Vender', cash:'Caja',
     purchases:'Compras', salehistory:'Historial de ventas', expenses:'Gastos y finanzas',
-    reports:'Reportes', calendar:'Calendario y notas', reminders:'Recordatorios', losses:'Pérdidas de productos', settings:'Ajustes'};
+    reports:'Reportes', calendar:'Calendario y notas', reminders:'Recordatorios', losses:'Pérdidas de productos', settings:'Ajustes', orders:'Pedidos'};
   document.getElementById('topTitle').textContent = titles[app.view] || 'AlmacénPro';
 }
 function openMoreSheet(){
   const admin = app.role==='admin';
+  const pendCount = DB.orders.filter(o=>o.status==='pedido'||o.status==='preparando').length;
   ui.openSheet(`
     <div class="sheet-header"><div class="sheet-title">Más opciones</div>
       <button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
     <div class="stack">
+      ${moreRow('orders','🧺','Pedidos', pendCount)}
       ${canVendor('addClients')? moreRow('clients','👤','Clientes'):''}
       ${admin? moreRow('purchases','🧾','Compras y facturas'):''}
       ${moreRow('salehistory','📜', admin?'Historial de ventas':'Ventas de hoy')}
@@ -1063,9 +1111,9 @@ function openMoreSheet(){
     </div>
   `);
 }
-function moreRow(v,ic,lb){
+function moreRow(v,ic,lb,badge){
   return `<button class="btn btn-ghost btn-block" style="justify-content:flex-start;font-size:calc(14.5px * var(--font-scale))" onclick="app.go('${v}')">
-    <span style="font-size:18px;margin-right:4px">${ic}</span> ${lb}
+    <span style="font-size:18px;margin-right:4px">${ic}</span> ${lb}${badge?` <span class="badge-num">${badge}</span>`:''}
   </button>`;
 }
 
@@ -1087,6 +1135,7 @@ function renderView(){
     case 'reminders': c.innerHTML = viewReminders(); fab.classList.remove('hidden'); fab.textContent='+'; fab.onclick=()=>openReminderForm(); break;
     case 'losses': c.innerHTML = viewLosses(); fab.classList.toggle('hidden', !canVendor('reportLosses')); fab.textContent='+'; fab.onclick=()=>openLossForm(); break;
     case 'clients': c.innerHTML = viewClientsScreen(); fab.classList.toggle('hidden', !canVendor('addClients')); fab.textContent='+'; fab.onclick=()=>openClientForm(); break;
+    case 'orders': c.innerHTML = viewOrders(); fab.classList.remove('hidden'); fab.textContent='+'; fab.onclick=()=>openOrderForm(); break;
     case 'settings': c.innerHTML = viewSettings(); break;
     default: c.innerHTML = viewHome();
   }
@@ -2127,7 +2176,11 @@ function renderClientPickResults(){
 }
 
 function clientDebt(clientId){
-  const owed = DB.sales.filter(s=>s.clientId===clientId && s.payment==='credit').reduce((a,s)=>a+s.total,0);
+  const owed = DB.sales.filter(s=>s.clientId===clientId).reduce((a,s)=>{
+    if(s.payment==='credit') return a+s.total;
+    if(s.payment==='mixed') return a + (s.items||[]).reduce((x,it)=>x+(it.creditQty||0)*it.price,0);
+    return a;
+  },0);
   const consignOwed = (DB.clientSales||[]).filter(s=>s.clientId===clientId).reduce((a,s)=>a+s.total,0);
   const paid = DB.clientPayments.filter(p=>p.clientId===clientId).reduce((a,p)=>a+p.amount,0);
   const adjustments = (DB.clientDebtAdjustments||[]).filter(a=>a.clientId===clientId).reduce((a,x)=>a+x.amount,0);
@@ -3337,6 +3390,305 @@ function saveLoss(){
 /* =========================================================
    AJUSTES
    ========================================================= */
+/* =========================================================
+   PEDIDOS (flujo por etapas: pedido -> preparando -> confirmado -> entregado)
+   ========================================================= */
+function orderStatusLabel(s){
+  return {pedido:'🆕 Pedido', preparando:'🧺 Acomodando', confirmado:'✅ Confirmado', entregado:'🚚 Entregado'}[s] || s;
+}
+function orderTotal(o){
+  return (o.items||[]).reduce((a,it)=>a+(it.qty*it.price),0);
+}
+function viewOrders(){
+  const groups = [
+    {status:'pedido', title:'Nuevos pedidos'},
+    {status:'preparando', title:'Acomodando'},
+    {status:'confirmado', title:'Confirmados (por entregar)'},
+    {status:'entregado', title:'Entregados'}
+  ];
+  let html = '';
+  groups.forEach(g=>{
+    const list = DB.orders.filter(o=>o.status===g.status).sort((a,b)=>new Date(b.updatedAt||b.createdAt)-new Date(a.updatedAt||a.createdAt));
+    if(!list.length && g.status==='entregado') return; // no saturar la pantalla con lo ya entregado
+    html += `<div class="section-title">${g.title} ${list.length?`<span class="badge-num">${list.length}</span>`:''}</div>`;
+    if(!list.length){
+      html += `<div class="small muted" style="padding:4px 0 10px">Nada aquí</div>`;
+    } else {
+      html += `<div class="card">` + list.map(o=>{
+        const name = o.clientName || (DB.clients.find(c=>c.id===o.clientId)||{}).name || 'Sin cliente';
+        return `<div class="list-item" onclick="openOrderDetail('${o.id}')" style="cursor:pointer">
+          <div class="thumb">🧺</div>
+          <div class="li-body"><div class="li-title">${esc(name)}</div><div class="li-sub">${(o.items||[]).length} productos · ${fmt(orderTotal(o))}</div></div>
+          <div class="li-right">${orderStatusLabel(o.status)}</div>
+        </div>`;
+      }).join('') + `</div>`;
+    }
+  });
+  if(!DB.orders.length){
+    html = `<div class="empty"><div class="eic">🧺</div><div class="et">Aún no hay pedidos</div><div class="ed">Toca + para anotar el primero.</div></div>`;
+  }
+  return html;
+}
+
+function openOrderForm(){
+  window._orderDraft = { clientId:null, clientName:'', items:[] };
+  renderOrderFormSheet();
+}
+function renderOrderFormSheet(){
+  const d = window._orderDraft;
+  const clientLabel = d.clientId ? (DB.clients.find(c=>c.id===d.clientId)||{}).name : (d.clientName || null);
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Nuevo pedido</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <label>Cliente</label>
+    <div class="mt-2 mb-2">
+      ${clientLabel
+        ? `<div class="list-item" style="background:var(--surface-2);border-radius:10px;padding:8px 10px">
+            <div class="li-body"><div class="li-title">${esc(clientLabel)}</div></div>
+            <button class="btn btn-danger btn-sm" onclick="window._orderDraft.clientId=null;window._orderDraft.clientName='';renderOrderFormSheet()">✕</button>
+          </div>`
+        : `<button class="btn btn-outline btn-block" onclick="openClientPicker(function(cid){ window._orderDraft.clientId=cid; window._orderDraft.clientName=''; renderOrderFormSheet(); })">🔎 Elegir cliente</button>
+           <button class="btn btn-ghost btn-block btn-sm mt-1" onclick="promptOrderFreeClientName()">Escribir un nombre (sin ficha de cliente)</button>`
+      }
+    </div>
+    <label>Productos del pedido</label>
+    <div class="mt-2" id="orderFormItems">${renderOrderItemsList(true)}</div>
+    <button class="btn btn-outline btn-block mt-2" onclick="openProductSearch(function(pid){ addOrderDraftItem(pid); })">🔎 Agregar producto del catálogo</button>
+    <button class="btn btn-ghost btn-block btn-sm mt-1" onclick="promptFreeOrderItem()">+ Agregar algo que no está en el inventario</button>
+    <button class="btn btn-primary btn-block mt-3" onclick="saveNewOrder()">Guardar pedido</button>
+  `);
+}
+function promptOrderFreeClientName(){
+  const name = prompt('Nombre del cliente (sin crear ficha):');
+  if(!name) return;
+  window._orderDraft.clientName = name.trim();
+  window._orderDraft.clientId = null;
+  renderOrderFormSheet();
+}
+function addOrderDraftItem(pid){
+  const p = DB.products.find(p=>p.id===pid);
+  if(!p) return;
+  window._orderDraft.items.push({productId:p.id, name:p.name, qty:1, price:(p.prices&&p.prices[0]?p.prices[0].price:0)});
+  renderOrderFormSheet();
+}
+function promptFreeOrderItem(){
+  const name = prompt('¿Qué pidió? (nombre del producto)');
+  if(!name) return;
+  const qty = parseFloat(prompt('Cantidad:', '1'))||1;
+  const price = parseFloat(prompt('Precio por unidad:', '0'))||0;
+  window._orderDraft.items.push({productId:null, name:name.trim(), qty, price});
+  renderOrderFormSheet();
+}
+function renderOrderItemsList(editable, order){
+  const items = order ? (order.items||[]) : window._orderDraft.items;
+  if(!items.length) return `<div class="small muted" style="padding:4px 0">Sin productos todavía</div>`;
+  return items.map((it,i)=>`
+    <div class="list-item">
+      <div class="li-body"><div class="li-title">${esc(it.name)}${it.productId?'':' <span class="small muted">(fuera de inventario)</span>'}</div>
+        <div class="li-sub">${it.qty} x ${fmt(it.price)} = ${fmt(it.qty*it.price)}</div></div>
+      ${editable?`<button class="btn btn-danger btn-sm" onclick="${order?`removeOrderDetailItem('${order.id}',${i})`:`window._orderDraft.items.splice(${i},1);renderOrderFormSheet()`}">✕</button>`:''}
+    </div>`).join('');
+}
+function saveNewOrder(){
+  const d = window._orderDraft;
+  if(!d.clientId && !d.clientName) return toast('Elige o escribe el cliente');
+  if(!d.items.length) return toast('Agrega al menos un producto');
+  const o = {
+    id: uid(), clientId: d.clientId, clientName: d.clientId?'':d.clientName,
+    items: d.items, status:'pedido', note:'',
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+  };
+  DB.orders.push(o);
+  save();
+  ui.closeSheet();
+  toast('Pedido guardado');
+  sendPushToOthers('🧺 Nuevo pedido', 'Pedido de '+(d.clientId?(DB.clients.find(c=>c.id===d.clientId)||{}).name:d.clientName)+' por acomodar', 'order-new');
+  renderView();
+}
+
+function openOrderDetail(id){
+  window._orderDetailId = id;
+  const o = DB.orders.find(o=>o.id===id);
+  if(!o) return;
+  const name = o.clientName || (DB.clients.find(c=>c.id===o.clientId)||{}).name || 'Sin cliente';
+  const editable = (o.status==='pedido' || o.status==='preparando');
+  let actions = '';
+  if(o.status==='pedido'){
+    actions = `<button class="btn btn-primary btn-block mt-2" onclick="setOrderStatus('${id}','preparando')">🧺 Empezar a acomodar</button>`;
+  } else if(o.status==='preparando'){
+    actions = `
+      <button class="btn btn-outline btn-block mt-2" onclick="openProductSearch(function(pid){ addOrderDetailItem('${id}', pid); })">🔎 Agregar producto</button>
+      <button class="btn btn-ghost btn-block btn-sm mt-1" onclick="promptFreeOrderDetailItem('${id}')">+ Agregar algo fuera de inventario</button>
+      <button class="btn btn-primary btn-block mt-3" onclick="openConfirmOrderAsSale('${id}')">✅ Confirmar como venta</button>
+      <button class="btn btn-outline btn-block mt-2" onclick="confirmOrderAsDeposit('${id}')">📦 Confirmar como depósito en su almacén</button>`;
+  } else if(o.status==='confirmado'){
+    actions = `<div class="small muted" style="margin:6px 0">Se confirmó como <b>${o.kind==='deposito'?'depósito en almacén':'venta'}</b>. Los productos ya no se editan aquí — para corregir algo usa devoluciones o ajuste de deuda desde el perfil del cliente.</div>
+      ${o.kind==='venta' && o.saleId ? `<button class="btn btn-outline btn-block mt-2" onclick="openEditSaleCreditSplit('${o.saleId}')">✏️ Corregir qué quedó a crédito</button>` : ''}
+      <button class="btn btn-primary btn-block mt-2" onclick="setOrderStatus('${id}','entregado')">🚚 Marcar entregado</button>`;
+  } else if(o.status==='entregado'){
+    actions = `<div class="small muted" style="margin:6px 0">Entregado${o.deliveredAt?' el '+new Date(o.deliveredAt).toLocaleDateString('es-MX'):''}.</div>
+      ${o.kind==='venta' && o.saleId ? `<button class="btn btn-outline btn-block mt-2" onclick="openEditSaleCreditSplit('${o.saleId}')">✏️ Corregir qué quedó a crédito</button>` : ''}`;
+  }
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">${esc(name)} · ${orderStatusLabel(o.status)}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div id="orderDetailItems">${renderOrderItemsList(editable, o)}</div>
+    <div class="row mt-2"><span style="font-weight:800">Total</span><span class="mono" style="font-weight:800">${fmt(orderTotal(o))}</span></div>
+    <div class="field mt-2"><label>Nota</label><textarea id="orderNote" rows="2" onchange="updateOrderNote('${id}', this.value)">${esc(o.note||'')}</textarea></div>
+    ${actions}
+    ${o.status!=='entregado'?`<button class="btn btn-ghost btn-block mt-2" style="color:var(--danger)" onclick="if(confirm('¿Eliminar este pedido?')){DB.orders=DB.orders.filter(x=>x.id!=='${id}');save();ui.closeSheet();renderView();}">Eliminar pedido</button>`:''}
+  `);
+}
+function updateOrderNote(id, val){
+  const o = DB.orders.find(o=>o.id===id);
+  if(!o) return;
+  o.note = val; o.updatedAt = new Date().toISOString();
+  save();
+}
+function setOrderStatus(id, status){
+  const o = DB.orders.find(o=>o.id===id);
+  if(!o) return;
+  o.status = status; o.updatedAt = new Date().toISOString();
+  if(status==='entregado') o.deliveredAt = new Date().toISOString();
+  save();
+  ui.closeSheet();
+  toast('Pedido actualizado');
+  if(status==='entregado') sendPushToOthers('🚚 Pedido entregado', 'El pedido de '+(o.clientName||(DB.clients.find(c=>c.id===o.clientId)||{}).name)+' ya se entregó', 'order-delivered');
+  renderView();
+}
+function addOrderDetailItem(id, pid){
+  const o = DB.orders.find(o=>o.id===id);
+  const p = DB.products.find(p=>p.id===pid);
+  if(!o || !p) return;
+  o.items.push({productId:p.id, name:p.name, qty:1, price:(p.prices&&p.prices[0]?p.prices[0].price:0)});
+  o.updatedAt = new Date().toISOString();
+  save();
+  openOrderDetail(id);
+}
+function promptFreeOrderDetailItem(id){
+  const o = DB.orders.find(o=>o.id===id);
+  if(!o) return;
+  const name = prompt('¿Qué lleva? (nombre del producto)');
+  if(!name) return;
+  const qty = parseFloat(prompt('Cantidad:', '1'))||1;
+  const price = parseFloat(prompt('Precio por unidad:', '0'))||0;
+  o.items.push({productId:null, name:name.trim(), qty, price});
+  o.updatedAt = new Date().toISOString();
+  save();
+  openOrderDetail(id);
+}
+function removeOrderDetailItem(id, idx){
+  const o = DB.orders.find(o=>o.id===id);
+  if(!o) return;
+  o.items.splice(idx,1);
+  o.updatedAt = new Date().toISOString();
+  save();
+  openOrderDetail(id);
+}
+
+function openConfirmOrderAsSale(id){
+  const o = DB.orders.find(o=>o.id===id);
+  if(!o) return;
+  if(!o.items.length) return toast('El pedido no tiene productos');
+  window._confirmOrderId = id;
+  const rows = o.items.map((it,i)=>`
+    <div class="list-item">
+      <div class="li-body"><div class="li-title">${esc(it.name)}</div><div class="li-sub">${it.qty} x ${fmt(it.price)} = ${fmt(it.qty*it.price)}</div></div>
+      <div style="width:90px">
+        <label class="small muted">A crédito</label>
+        <input type="number" class="mono" id="creditQty_${i}" value="0" min="0" max="${it.qty}" step="1" style="width:100%;text-align:right">
+      </div>
+    </div>`).join('');
+  ui.openPicker(`
+    <div class="sheet-header"><div class="sheet-title">¿Cuánto de cada producto queda a deber?</div><button class="sheet-close" onclick="ui.closePicker()">✕</button></div>
+    <div class="small muted" style="margin-bottom:8px">Deja en 0 lo que se pagó ahí mismo. Puedes dejar a crédito solo una parte de la cantidad, no todo el producto.</div>
+    ${!o.clientId?`<div class="small muted" style="margin-bottom:8px;color:var(--danger)">Este pedido no tiene un cliente con ficha — no se puede dejar nada a crédito. Deja todo en 0, o vuelve atrás y asígnale un cliente.</div>`:''}
+    <div class="card">${rows}</div>
+    <button class="btn btn-primary btn-block mt-3" onclick="confirmOrderAsSale('${id}')">Confirmar venta</button>
+  `);
+}
+function confirmOrderAsSale(id){
+  const o = DB.orders.find(o=>o.id===id);
+  if(!o) return;
+  const items = o.items.map((it,i)=>{
+    let creditQty = parseFloat(document.getElementById('creditQty_'+i).value)||0;
+    if(!o.clientId) creditQty = 0;
+    creditQty = Math.max(0, Math.min(creditQty, it.qty));
+    return {productId:it.productId, name:it.name, price:it.price, qty:it.qty, creditQty};
+  });
+  const allCash = items.every(it=>it.creditQty===0);
+  const allCredit = items.every(it=>it.creditQty===it.qty);
+  const payment = allCash ? 'cash' : (allCredit ? 'credit' : 'mixed');
+  const sale = {
+    id: uid(), date: new Date().toISOString(), clientId: o.clientId||null,
+    payment, total: orderTotal(o), items
+  };
+  DB.sales.push(sale);
+  recomputeStock();
+  o.status = 'confirmado'; o.kind = 'venta'; o.saleId = sale.id; o.updatedAt = new Date().toISOString();
+  save();
+  ui.closePicker(); ui.closeSheet();
+  toast('Pedido confirmado como venta');
+  sendPushToOthers('✅ Pedido listo', 'El pedido de '+(o.clientName||(DB.clients.find(c=>c.id===o.clientId)||{}).name)+' ya está listo para entregar', 'order-ready');
+  renderView();
+}
+function openEditSaleCreditSplit(saleId){
+  const s = DB.sales.find(s=>s.id===saleId);
+  if(!s) return;
+  window._editSaleId = saleId;
+  const rows = s.items.map((it,i)=>`
+    <div class="list-item">
+      <div class="li-body"><div class="li-title">${esc(it.name||'')}</div><div class="li-sub">${it.qty} x ${fmt(it.price)}</div></div>
+      <div style="width:90px">
+        <label class="small muted">A crédito</label>
+        <input type="number" class="mono" id="editCreditQty_${i}" value="${it.creditQty||0}" min="0" max="${it.qty}" step="1" style="width:100%;text-align:right">
+      </div>
+    </div>`).join('');
+  ui.openPicker(`
+    <div class="sheet-header"><div class="sheet-title">Corregir qué quedó a crédito</div><button class="sheet-close" onclick="ui.closePicker()">✕</button></div>
+    <div class="small muted" style="margin-bottom:8px">Esto solo corrige cuánto quedó a deber de cada producto — no cambia cantidades ni precios de la venta ya hecha.</div>
+    <div class="card">${rows}</div>
+    <button class="btn btn-primary btn-block mt-3" onclick="saveEditSaleCreditSplit('${saleId}')">Guardar corrección</button>
+  `);
+}
+function saveEditSaleCreditSplit(saleId){
+  const s = DB.sales.find(s=>s.id===saleId);
+  if(!s) return;
+  s.items.forEach((it,i)=>{
+    let v = parseFloat(document.getElementById('editCreditQty_'+i).value)||0;
+    it.creditQty = Math.max(0, Math.min(v, it.qty));
+  });
+  const allCash = s.items.every(it=>(it.creditQty||0)===0);
+  const allCredit = s.items.every(it=>(it.creditQty||0)===it.qty);
+  s.payment = allCash ? 'cash' : (allCredit ? 'credit' : 'mixed');
+  save();
+  ui.closePicker();
+  toast('Corregido');
+  renderView();
+}
+function confirmOrderAsDeposit(id){
+  const o = DB.orders.find(o=>o.id===id);
+  if(!o) return;
+  if(!o.clientId){ toast('Para depositar en su almacén, el pedido necesita un cliente con ficha'); return; }
+  const catalogItems = o.items.filter(it=>it.productId);
+  const freeItems = o.items.filter(it=>!it.productId);
+  if(!catalogItems.length){ toast('Ninguno de estos productos está en el inventario, no se puede depositar'); return; }
+  for(const it of catalogItems){
+    const p = DB.products.find(p=>p.id===it.productId);
+    if(!p || p.stock < it.qty){ toast('No hay suficiente stock de "'+it.name+'" para depositar'); return; }
+  }
+  DB.consignments.push({id:uid(), clientId:o.clientId, date:new Date().toISOString(), items:catalogItems.map(it=>({productId:it.productId, qty:it.qty})), createdAt:new Date().toISOString()});
+  catalogItems.forEach(it=>{
+    if(getClientProductPrice(o.clientId, it.productId)==null) setClientProductPrice(o.clientId, it.productId, it.price);
+  });
+  recomputeStock();
+  o.status = 'confirmado'; o.kind = 'deposito'; o.updatedAt = new Date().toISOString();
+  if(freeItems.length) o.note = (o.note?o.note+' · ':'') + 'Nota: '+freeItems.map(it=>it.name+' x'+it.qty).join(', ')+' no se pudieron depositar (fuera de inventario)';
+  save();
+  ui.closeSheet();
+  toast('Pedido confirmado como depósito' + (freeItems.length?' (algunos productos no se pudieron depositar)':''));
+  sendPushToOthers('✅ Pedido listo', 'El pedido de '+(DB.clients.find(c=>c.id===o.clientId)||{}).name+' ya está listo para entregar', 'order-ready');
+  renderView();
+}
+
 function viewSettings(){
   const isAdmin = app.role==='admin';
   let html = `<div class="section-title">Negocio</div>
@@ -3518,11 +3870,11 @@ function removeQtyStep(i){
   DB.settings.qtySteps.splice(i,1);
   save(); renderQtyStepsEditList();
 }
-async function fetchEltoqueRate(){
+async function fetchEltoqueRate(silent){
   const key = (DB.settings.eltoqueApiKey||'').trim();
-  if(!key){ toast('Ingresa tu clave de API de elTOQUE primero y guárdala'); return; }
-  if(!app.userId){ toast('Necesitas sesión iniciada para actualizar la tasa'); return; }
-  toast('Consultando elTOQUE...');
+  if(!key){ if(!silent) toast('Ingresa tu clave de API de elTOQUE primero y guárdala'); return; }
+  if(!app.userId){ if(!silent) toast('Necesitas sesión iniciada para actualizar la tasa'); return; }
+  if(!silent) toast('Consultando elTOQUE...');
   try{
     const { data: { session } } = await sb.auth.getSession();
     const res = await fetch(SUPABASE_URL + '/functions/v1/update-usd-rate', {
@@ -3534,11 +3886,11 @@ async function fetchEltoqueRate(){
     DB.settings.usdRate = body.usd_rate;
     DB.settings.usdRateUpdated = 'elTOQUE · '+body.updated;
     save();
-    toast('Tasa actualizada: 1 USD = '+body.usd_rate+' '+DB.meta.currency);
+    if(!silent) toast('Tasa actualizada: 1 USD = '+body.usd_rate+' '+DB.meta.currency);
     renderView();
   }catch(err){
     console.error('Error consultando elTOQUE:', err);
-    toast('No se pudo actualizar: '+(err.message||err));
+    if(!silent) toast('No se pudo actualizar: '+(err.message||err));
   }
 }
 
