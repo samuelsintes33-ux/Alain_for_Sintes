@@ -516,7 +516,10 @@ function recomputeStock(){
   DB.products.forEach(p=> map[p.id]=0);
   DB.purchases.forEach(pu=> pu.items.forEach(it=>{ if(map[it.productId]!=null) map[it.productId]+=it.qty; }));
   DB.sales.forEach(s=> s.items.forEach(it=>{ if(map[it.productId]!=null) map[it.productId]-=it.qty; }));
-  (DB.consignments||[]).forEach(c=> c.items.forEach(it=>{ if(map[it.productId]!=null) map[it.productId]-=it.qty; }));
+  // Los depósitos normales SÍ salen del almacén propio. Los ajustes de "inventario inicial/
+  // corrección" de un cliente (isInitialBalance) son solo contables para ese cliente — nunca
+  // tocan el stock del negocio, porque el producto nunca salió físicamente en ese momento.
+  (DB.consignments||[]).forEach(c=>{ if(c.isInitialBalance) return; c.items.forEach(it=>{ if(map[it.productId]!=null) map[it.productId]-=it.qty; }); });
   (DB.clientReturns||[]).forEach(r=> r.items.forEach(it=>{ if(map[it.productId]!=null) map[it.productId]+=it.qty; }));
   (DB.stockAdjustments||[]).forEach(a=>{ if(map[a.productId]!=null) map[a.productId]+=a.delta; });
   DB.products.forEach(p=> p.stock = map[p.id]||0);
@@ -738,6 +741,10 @@ async function afterAuthSuccess(){
   app.userName = profile.name;
   cacheProfile(user.id, profile.name, profile.role);
   toast('Sincronizando datos...');
+  // Primero se sube lo que este teléfono ya tenía (por ejemplo, si acabas de restaurar un
+  // archivo o cambiar de cuenta admin/vendedor con cambios sin subir todavía) y solo después
+  // se trae lo que haga falta de la nube — nunca al revés.
+  await syncPush();
   await syncPullAll();
   startRealtimeSync();
   app._doLogin(profile.role);
@@ -787,30 +794,24 @@ async function supabaseSignOut(){
 const _syncedIds = {}; // tabla -> Set de ids que sabemos que ya existen en Supabase
 let _syncedCpp = new Set(); // claves "clientId::productId" ya sincronizadas
 let _syncBusy = false, _syncPending = false, _syncBooted = false, _lastPushAt = 0;
+let _warnedOrphanCats = false; // evita repetir el aviso de "categoría inválida" en cada guardado
 
 function markSynced(table, id){ (_syncedIds[table] || (_syncedIds[table]=new Set())).add(id); }
 
 async function syncUpsertTable(table, items, mapFn){
+  // IMPORTANTE: esta función SOLO sube (upsert). Ya NO borra de la nube por diferencia de
+  // arrays. Eso causó una pérdida real de datos (agosto 2026): si una subida fallaba por
+  // cualquier motivo (ej. un producto con categoría inválida) y luego se restaba localmente
+  // por otra razón, la próxima sincronización interpretaba "ya no está" y lo borraba para
+  // todo el equipo. Ahora, el único borrado en la nube es explícito: una acción puntual del
+  // usuario sobre UN registro (ver removeReminder) hace su propio delete dirigido, nunca por
+  // diferencia de listas completas.
   const set = _syncedIds[table] || (_syncedIds[table]=new Set());
   if(items.length){
     const rows = items.map(mapFn);
     const { error } = await sb.from(table).upsert(rows, {onConflict:'id'});
     if(error){ console.error('Sync '+table, error); return false; }
     items.forEach(it=>set.add(it.id));
-  }
-  const currentIds = new Set(items.map(it=>it.id));
-  const toDelete = [...set].filter(id=>!currentIds.has(id));
-  if(toDelete.length){
-    // Freno de seguridad: si de golpe se van a borrar muchos registros que antes existían
-    // (por ejemplo, al restaurar un archivo viejo o un error), se pregunta antes de borrar
-    // en la nube — eso evita que se pierda de golpe la información de todo el equipo.
-    const massive = toDelete.length>=5 && toDelete.length >= set.size*0.4;
-    if(massive){
-      const ok = confirm('Se van a borrar '+toDelete.length+' de '+set.size+' registros de "'+table+'" en la nube, compartidos con todo el equipo. ¿Seguro que quieres continuar?');
-      if(!ok){ toast('Cancelado: no se borró nada de "'+table+'"'); return true; }
-    }
-    const { error } = await sb.from(table).delete().in('id', toDelete);
-    if(!error) toDelete.forEach(id=>set.delete(id));
   }
   return true;
 }
@@ -839,9 +840,47 @@ async function syncPush(){
   return withSyncLock(async ()=>{
     _lastPushAt = Date.now();
     try{
+      // Las categorías se suben primero y SE ESPERA a que terminen antes de subir productos.
+      // products.category_id es una llave foránea hacia categories: si se subieran ambas en
+      // paralelo (como antes), podía darse una carrera donde el producto llega a la base de
+      // datos antes de que su categoría exista todavía, y Postgres rechaza el lote COMPLETO
+      // de productos con un error — esto fue la causa real de la pérdida de inventario del
+      // 20 de agosto de 2026.
+      await syncUpsertTable('categories', DB.categories, c=>({id:c.id, name:c.name, data:c}));
+
+      // Además, se sanea category_id/subcategory_id de cada producto contra las categorías que
+      // existen REALMENTE ahora mismo en este dispositivo. Si un producto quedó apuntando a una
+      // categoría que ya no existe (por ejemplo, tras restaurar un archivo de respaldo viejo o
+      // incompleto), en vez de dejar que ESE producto tumbe la subida de TODOS los productos con
+      // un error de la base de datos, se sube igual pero sin esa categoría rota, y se avisa una
+      // sola vez para que se corrija a mano.
+      const validCatIds = new Set(DB.categories.map(c=>c.id));
+      const validSubIds = new Set(DB.categories.flatMap(c=>(c.subs||[]).map(s=>s.id)));
+      let orphanCount = 0;
+      const productRows = DB.products.map(p=>{
+        let catId = p.catId||null, subId = p.subId||null;
+        if(catId && !validCatIds.has(catId)){ orphanCount++; catId=null; subId=null; }
+        else if(subId && !validSubIds.has(subId)){ subId=null; }
+        return {id:p.id, category_id:catId, subcategory_id:subId, name:p.name, cost_price:p.costPrice||0, stock:p.stock||0, min_stock:p.minStock||0, data:p};
+      });
+      if(orphanCount){
+        if(!_warnedOrphanCats){
+          _warnedOrphanCats = true;
+          toast('⚠️ '+orphanCount+' producto(s) tenían una categoría que ya no existe; se subieron sin categoría. Revísalos en Inventario.');
+        }
+      } else {
+        _warnedOrphanCats = false;
+      }
+
       await Promise.all([
-        syncUpsertTable('categories', DB.categories, c=>({id:c.id, name:c.name, data:c})),
-        syncUpsertTable('products', DB.products, p=>({id:p.id, category_id:p.catId||null, subcategory_id:p.subId||null, name:p.name, cost_price:p.costPrice||0, stock:p.stock||0, min_stock:p.minStock||0, data:p})),
+        (async ()=>{
+          if(!productRows.length) return true;
+          const { error } = await sb.from('products').upsert(productRows, {onConflict:'id'});
+          if(error){ console.error('Sync products', error); return false; }
+          const set = _syncedIds['products'] || (_syncedIds['products']=new Set());
+          DB.products.forEach(p=>set.add(p.id));
+          return true;
+        })(),
         syncUpsertTable('clients', DB.clients, c=>({id:c.id, name:c.name, phone:c.phone||null, description:c.desc||'', data:c})),
         syncUpsertTable('reminders', DB.reminders, r=>({id:r.id, title:r.title, date:r.date, note:null, done:!!r.done, data:r})),
         syncUpsertTable('orders', DB.orders, o=>({id:o.id, client_id:o.clientId||null, status:o.status, created_by:app.userId, updated_at:new Date().toISOString(), data:o})),
@@ -864,16 +903,13 @@ async function syncPush(){
             const [clientId, productId] = k.split('::');
             return { key:k, client_id:clientId, product_id:productId, price:DB.clientProductPrices[k] };
           });
+          // Igual que las demás tablas: solo se sube (upsert). Ya no se borra por diferencia
+          // de claves — no hay hoy ninguna acción en la app para "quitar" un precio congelado
+          // de un cliente, así que ese borrado automático nunca tuvo un caso de uso real y solo
+          // representaba el mismo riesgo que causó la pérdida de productos.
           if(cppRows.length){
             const { error } = await sb.from('client_product_prices').upsert(cppRows.map(r=>({client_id:r.client_id, product_id:r.product_id, price:r.price})), {onConflict:'client_id,product_id'});
             if(!error) cppRows.forEach(r=>_syncedCpp.add(r.key));
-          }
-          const currentCppKeys = new Set(cppRows.map(r=>r.key));
-          const cppToDelete = [..._syncedCpp].filter(k=>!currentCppKeys.has(k));
-          for(const k of cppToDelete){
-            const [clientId, productId] = k.split('::');
-            await sb.from('client_product_prices').delete().eq('client_id', clientId).eq('product_id', productId);
-            _syncedCpp.delete(k);
           }
         })(),
         (async ()=>{
@@ -903,6 +939,26 @@ async function syncPush(){
 async function syncPullAll(){
   return withSyncLock(_syncPullAllInner);
 }
+async function manualSyncNow(){
+  if(!app.userId){ toast('Inicia sesión para sincronizar con la nube'); return; }
+  const btn = document.getElementById('manualSyncBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '☁️ Sincronizando...'; }
+  try{
+    // Orden fijo, tal como se pidió: primero sube lo de este teléfono, y solo después baja lo
+    // que haga falta de la nube (que ahora se fusiona, nunca reemplaza — ver _syncPullAllInner).
+    await syncPush();
+    await syncPullAll();
+    DB.lastCloudSyncAt = nowStamp();
+    saveLocalOnly();
+    toast('✅ Sincronizado con la nube');
+  }catch(err){
+    console.error('Sincronización manual', err);
+    toast('No se pudo sincronizar: revisa tu conexión');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '☁️ Sincronizar ahora'; }
+    renderView();
+  }
+}
 async function _syncPullAllInner(){
   const [cats, prods, clis, rems, ords, purs, sals, cpays, cadjs, cons, crets, csals, exps, loss, sadj, ccnt, cevt, cnote, cpp, settingsRes] = await Promise.all([
     sb.from('categories').select('data'),
@@ -927,26 +983,57 @@ async function _syncPullAllInner(){
     sb.from('app_settings').select('*').eq('id',1).single()
   ]);
   const unwrap = res => (res.data||[]).map(r=>r.data);
-  DB.categories = unwrap(cats); if(!DB.categories.length) DB.categories = defaultDB().categories;
-  DB.products = unwrap(prods);
-  DB.clients = unwrap(clis);
-  DB.reminders = unwrap(rems);
-  DB.orders = unwrap(ords);
-  DB.purchases = unwrap(purs);
-  DB.sales = unwrap(sals);
-  DB.clientPayments = unwrap(cpays);
-  DB.clientDebtAdjustments = unwrap(cadjs);
-  DB.consignments = unwrap(cons);
-  DB.clientReturns = unwrap(crets);
-  DB.clientSales = unwrap(csals);
-  DB.expenses = unwrap(exps);
-  DB.losses = unwrap(loss);
-  DB.stockAdjustments = unwrap(sadj);
-  DB.cashCounts = unwrap(ccnt);
-  DB.events = unwrap(cevt);
-  DB.notes = unwrap(cnote);
-  DB.clientProductPrices = {};
-  (cpp.data||[]).forEach(r=>{ DB.clientProductPrices[r.client_id+'::'+r.product_id] = r.price; });
+
+  // FUSIÓN, nunca reemplazo. Esto es lo más importante del motor de sincronización: lo que
+  // trae la nube se SUMA a lo que ya hay en este teléfono, nunca lo reemplaza en bloque.
+  // - Un registro que solo existe localmente (recién creado/editado y que todavía no terminó
+  //   de subirse) NUNCA desaparece solo porque llegó una bajada mientras tanto.
+  // - Si el mismo id existe en los dos lados, se queda con el más reciente según
+  //   updatedAt/createdAt (para lo insertado-solo como ventas, da igual: son inmutables).
+  // Antes, esta función hacía "DB.x = lo que llegó de la nube" sin más — así, si la nube
+  // estaba vacía o desactualizada por cualquier motivo (ej. una subida que falló), la
+  // siguiente bajada (como la que ocurre automáticamente al cambiar entre cuenta de admin y
+  // vendedor) borraba de un plumazo todo lo que hubiera en el teléfono. Eso fue lo que pasó
+  // el 20 de agosto de 2026.
+  const mergeArr = (localArr, remoteArr) => {
+    const map = {};
+    (localArr||[]).forEach(x=> map[x.id]=x);
+    (remoteArr||[]).forEach(x=>{
+      const l = map[x.id];
+      if(!l){ map[x.id]=x; return; }
+      const lt = l.updatedAt||l.createdAt||'';
+      const rt = x.updatedAt||x.createdAt||'';
+      map[x.id] = (rt >= lt) ? x : l; // en empate o sin fechas, gana lo remoto (ya confirmado por la nube)
+    });
+    return Object.values(map);
+  };
+
+  const remoteCats = unwrap(cats);
+  DB.categories = remoteCats.length || DB.categories.length ? mergeArr(DB.categories, remoteCats) : defaultDB().categories;
+  DB.products = mergeArr(DB.products, unwrap(prods));
+  DB.clients = mergeArr(DB.clients, unwrap(clis));
+  DB.reminders = mergeArr(DB.reminders, unwrap(rems));
+  DB.orders = mergeArr(DB.orders, unwrap(ords));
+  DB.purchases = mergeArr(DB.purchases, unwrap(purs));
+  DB.sales = mergeArr(DB.sales, unwrap(sals));
+  DB.clientPayments = mergeArr(DB.clientPayments, unwrap(cpays));
+  DB.clientDebtAdjustments = mergeArr(DB.clientDebtAdjustments, unwrap(cadjs));
+  DB.consignments = mergeArr(DB.consignments, unwrap(cons));
+  DB.clientReturns = mergeArr(DB.clientReturns, unwrap(crets));
+  DB.clientSales = mergeArr(DB.clientSales, unwrap(csals));
+  DB.expenses = mergeArr(DB.expenses, unwrap(exps));
+  DB.losses = mergeArr(DB.losses, unwrap(loss));
+  DB.stockAdjustments = mergeArr(DB.stockAdjustments, unwrap(sadj));
+  DB.cashCounts = mergeArr(DB.cashCounts, unwrap(ccnt));
+  DB.events = mergeArr(DB.events, unwrap(cevt));
+  DB.notes = mergeArr(DB.notes, unwrap(cnote));
+  // Precios congelados por cliente: se completa con lo que falte de la nube, sin pisar un
+  // precio que ya se haya fijado localmente y todavía no se haya subido.
+  DB.clientProductPrices = DB.clientProductPrices || {};
+  (cpp.data||[]).forEach(r=>{
+    const k = r.client_id+'::'+r.product_id;
+    if(!(k in DB.clientProductPrices)) DB.clientProductPrices[k] = r.price;
+  });
 
   // reconstruir los índices de "ya sincronizado" con lo que acabamos de traer
   const setIds = (table, arr) => { _syncedIds[table] = new Set(arr.map(it=>it.id)); };
@@ -2341,6 +2428,98 @@ function saveConsignDeposit(clientId){
   openClientDetail(clientId);
 }
 
+/* ---------- Ajuste directo de inventario de cliente (NO sale del almacén propio) ----------
+   Para cargar el estado real de un negocio que ya venía funcionando: productos que hoy están
+   físicamente en casa de un cliente, sin inventar depósitos/compras falsas para cuadrar. Sirve
+   tanto para la carga inicial como para corregir un descuadre más adelante (ej. "conté
+   físicamente y tiene 2 menos de lo que dice el sistema") — se puede usar las veces que haga
+   falta, no es una acción de una sola vez. */
+function openClientInventoryAdjustForm(clientId){
+  if(app.role!=='admin'){ toast('Solo el administrador puede hacer este ajuste'); return; }
+  const c = DB.clients.find(x=>x.id===clientId);
+  if(!c) return;
+  window._invAdjClientId = clientId;
+  window._invAdjCart = []; // {productId, newQty}
+  window._invAdjSelectedProduct = null;
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Editar inventario — ${esc(c.name)}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="card" style="background:var(--surface-2)">
+      <div class="small">⚠️ Esto NO es un depósito normal: aquí escribes directamente cuánto tiene <b>ahora mismo</b> este cliente de cada producto, sin tocar el almacén propio (el producto no sale del almacén en este momento). Úsalo para cargar el punto de partida real del negocio, o para corregir un descuadre después de contar físicamente.</div>
+    </div>
+    <label class="mt-2">Buscar producto</label>
+    <div id="invAdjSelectedBox" class="mt-2"></div>
+    <button class="btn btn-outline btn-block mt-2" onclick="openProductSearch(function(pid){selectInvAdjProduct(pid);}, {allowCreate:false})">🔎 Buscar producto</button>
+    <div class="field mt-2"><label>Cantidad real que tiene ahora</label><input type="number" id="invAdjQty" value="0"></div>
+    <div class="mt-2" id="invAdjQtySteps"></div>
+    <button class="btn btn-ghost btn-block mt-2" onclick="addInvAdjLine()">+ Agregar al ajuste</button>
+    <div id="invAdjLines" class="stack mt-2"></div>
+    <button class="btn btn-primary btn-block mt-3" onclick="saveInvAdjustment('${clientId}')">Guardar ajuste de inventario</button>
+  `);
+  document.getElementById('invAdjQtySteps').innerHTML = qtyStepsHTML('invAdjQty', null);
+  renderInvAdjLines();
+}
+function selectInvAdjProduct(pid){
+  const p = DB.products.find(p=>p.id===pid);
+  if(!p) return;
+  window._invAdjSelectedProduct = p;
+  const stockMap = clientProductStockMap(window._invAdjClientId);
+  const current = stockMap[pid]||0;
+  document.getElementById('invAdjSelectedBox').innerHTML = `
+    <div class="list-item" style="background:var(--surface-2);border-radius:10px;padding:8px 10px">
+      ${thumbHtml(p)}
+      <div class="li-body"><div class="li-title">${esc(p.name)}</div><div class="li-sub">Tiene registrado ahora: ${current}</div></div>
+      <button class="btn btn-danger btn-sm" onclick="window._invAdjSelectedProduct=null;document.getElementById('invAdjSelectedBox').innerHTML=''">✕</button>
+    </div>`;
+  document.getElementById('invAdjQty').value = current;
+}
+function addInvAdjLine(){
+  const p = window._invAdjSelectedProduct;
+  const newQty = parseFloat(document.getElementById('invAdjQty').value);
+  if(!p || isNaN(newQty) || newQty<0) return toast('Busca un producto y escribe una cantidad válida');
+  window._invAdjCart = window._invAdjCart.filter(l=>l.productId!==p.id);
+  window._invAdjCart.push({productId:p.id, newQty});
+  window._invAdjSelectedProduct = null;
+  document.getElementById('invAdjSelectedBox').innerHTML = '';
+  document.getElementById('invAdjQty').value = 0;
+  renderInvAdjLines();
+}
+function renderInvAdjLines(){
+  const wrap = document.getElementById('invAdjLines');
+  if(!wrap) return;
+  const stockMap = clientProductStockMap(window._invAdjClientId);
+  wrap.innerHTML = window._invAdjCart.map((l,i)=>{
+    const p = DB.products.find(p=>p.id===l.productId);
+    const current = stockMap[l.productId]||0;
+    const delta = l.newQty - current;
+    return `<div class="cart-line"><div class="li-body"><div class="li-title">${esc(p?p.name:'?')}</div><div class="li-sub">${current} → ${l.newQty} (${delta>=0?'+':''}${delta})</div></div>
+      <button class="btn btn-danger btn-sm" onclick="window._invAdjCart.splice(${i},1);renderInvAdjLines()">✕</button></div>`;
+  }).join('');
+}
+function saveInvAdjustment(clientId){
+  if(!window._invAdjCart.length) return toast('Agrega al menos un producto');
+  const stockMap = clientProductStockMap(clientId);
+  const items = window._invAdjCart
+    .map(l=>({productId:l.productId, qty: l.newQty - (stockMap[l.productId]||0)}))
+    .filter(it=>it.qty!==0);
+  if(!items.length){ toast('No hay cambios que guardar'); ui.closeSheet(); return; }
+  DB.consignments.push({
+    id:uid(), clientId, date:new Date().toISOString(), items,
+    isInitialBalance:true, note:'Ajuste directo de inventario (no salió del almacén propio)',
+    createdAt:new Date().toISOString()
+  });
+  items.forEach(it=>{
+    if(getClientProductPrice(clientId, it.productId)==null){
+      const p = DB.products.find(p=>p.id===it.productId);
+      setClientProductPrice(clientId, it.productId, p && p.prices[0] ? p.prices[0].price : 0);
+    }
+  });
+  recomputeStock();
+  save();
+  ui.closeSheet();
+  toast('Inventario del cliente actualizado');
+  openClientDetail(clientId);
+}
+
 function openClientReportSaleForm(clientId){
   const stockMap = clientProductStockMap(clientId);
   const heldIds = Object.keys(stockMap).filter(pid=>stockMap[pid]>0);
@@ -2653,10 +2832,12 @@ function openClientDetail(id){
           </div>`;
         } else if(t.kind==='deposit'){
           const dep = t.deposit;
-          const detail = dep.items.map(it=>{ const p=DB.products.find(p=>p.id===it.productId); return `${esc(p?p.name:'?')} x${it.qty}`; }).join(', ');
+          const detail = dep.items.map(it=>{ const p=DB.products.find(p=>p.id===it.productId); const sign = dep.isInitialBalance && it.qty>=0 ? '+' : ''; return `${esc(p?p.name:'?')} ${sign}${it.qty}`; }).join(', ');
+          const label = dep.isInitialBalance ? 'Ajuste de inventario (no salió del almacén)' : 'Depósito de mercancía';
+          const icon = dep.isInitialBalance ? '⚙️' : '📦';
           historyHtml += `<div class="list-item">
-            <div class="thumb">📦</div>
-            <div class="li-body"><div class="li-title">${dateLabel} · Depósito de mercancía</div><div class="li-sub">${detail}</div></div>
+            <div class="thumb">${icon}</div>
+            <div class="li-body"><div class="li-title">${dateLabel} · ${label}</div><div class="li-sub">${detail}</div></div>
           </div>`;
         } else if(t.kind==='return'){
           const ret = t.ret;
@@ -2725,6 +2906,9 @@ function openClientDetail(id){
       <button class="btn btn-outline btn-block btn-sm" onclick="openClientReturnForm('${c.id}')">↩️ Devolución</button>
       ${app.role==='admin'?`<button class="btn btn-outline btn-block btn-sm" onclick="openClientDebtAdjustForm('${c.id}')">⚖️ Ajustar deuda</button>`:''}
     </div>
+    ${app.role==='admin'?`<div class="gap-2 mt-2">
+      <button class="btn btn-outline btn-block btn-sm" onclick="openClientInventoryAdjustForm('${c.id}')">⚙️ Editar inventario</button>
+    </div>`:''}
     <div class="section-title">Historial</div>
     ${historyHtml}
   `);
@@ -3305,6 +3489,16 @@ function toggleReminder(id){
 }
 function removeReminder(id){
   DB.reminders = DB.reminders.filter(r=>r.id!==id);
+  // Borrado explícito y puntual de ESTE recordatorio en la nube — ya no se depende de que el
+  // motor de sincronización "adivine" qué borrar comparando listas completas (eso es lo que
+  // causó la pérdida de productos). Esto es intencional: una acción directa del usuario sobre
+  // un registro concreto, no un efecto secundario de sincronizar/restaurar.
+  if(app.userId){
+    sb.from('reminders').delete().eq('id', id).then(({error})=>{
+      if(error) console.error('No se pudo borrar el recordatorio en la nube', error);
+    });
+  }
+  const set = _syncedIds['reminders']; if(set) set.delete(id);
   save(); renderView();
 }
 /* Estos avisos son por dispositivo (no se sincronizan): cada celular con la app abierta
@@ -3867,6 +4061,15 @@ function viewSettings(){
   </div>`;
 
   if(isAdmin){ setTimeout(renderDenomEditList, 0); setTimeout(renderQtyStepsEditList, 0); }
+
+  if(app.userId){
+    html += `<div class="section-title">☁️ Sincronización con la nube</div>
+    <div class="card stack">
+      <div class="small muted" style="margin-bottom:2px">Sube primero lo que cambiaste en este teléfono y después trae lo que falte de los demás. Nunca borra nada que hayas creado o editado aquí.</div>
+      <button class="btn btn-primary btn-block" id="manualSyncBtn" onclick="manualSyncNow()">☁️ Sincronizar ahora</button>
+      <div class="small muted mt-2" id="manualSyncStatus">${DB.lastCloudSyncAt? 'Última sincronización: '+esc(DB.lastCloudSyncAt) : ''}</div>
+    </div>`;
+  }
 
   html += `<div class="section-title">Actualizar la aplicación</div>
   <div class="card stack">
