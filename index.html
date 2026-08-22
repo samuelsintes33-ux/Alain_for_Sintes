@@ -111,6 +111,8 @@ img{max-width:100%;display:block;}
 .icon-btn:active{background:rgba(255,255,255,.24);}
 .icon-btn:disabled{opacity:.3;cursor:default;}
 .icon-btn:disabled:active{background:rgba(255,255,255,.12);}
+.icon-btn.spin{animation:spin-anim 0.9s linear infinite;}
+@keyframes spin-anim{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
 .topbar-right{display:flex;gap:6px;align-items:center;}
 
 #view-container{flex:1;padding:14px 14px 90px;max-width:640px;margin:0 auto;width:100%;}
@@ -316,6 +318,7 @@ hr.sep{border:none;border-top:1px solid var(--border);margin:14px 0;}
       </div>
     </div>
     <div class="topbar-right">
+      <button class="icon-btn hidden" id="btnCloudSync" onclick="manualSyncNow()" title="Sincronizar con la nube">☁️</button>
       <button class="icon-btn" id="btnUndo" onclick="doUndo()" title="Deshacer" disabled>↶</button>
       <button class="icon-btn" id="btnRedo" onclick="doRedo()" title="Rehacer" disabled>↷</button>
       <button class="icon-btn" onclick="app.logout()" title="Cambiar modo">⇄</button>
@@ -941,8 +944,8 @@ async function syncPullAll(){
 }
 async function manualSyncNow(){
   if(!app.userId){ toast('Inicia sesión para sincronizar con la nube'); return; }
-  const btn = document.getElementById('manualSyncBtn');
-  if(btn){ btn.disabled = true; btn.textContent = '☁️ Sincronizando...'; }
+  const btn = document.getElementById('btnCloudSync');
+  if(btn){ btn.disabled = true; btn.classList.add('spin'); }
   try{
     // Orden fijo, tal como se pidió: primero sube lo de este teléfono, y solo después baja lo
     // que haga falta de la nube (que ahora se fusiona, nunca reemplaza — ver _syncPullAllInner).
@@ -955,7 +958,7 @@ async function manualSyncNow(){
     console.error('Sincronización manual', err);
     toast('No se pudo sincronizar: revisa tu conexión');
   }finally{
-    if(btn){ btn.disabled = false; btn.textContent = '☁️ Sincronizar ahora'; }
+    if(btn){ btn.disabled = false; btn.classList.remove('spin'); }
     renderView();
   }
 }
@@ -1123,6 +1126,8 @@ const app = {
     document.getElementById('screen-login').classList.remove('active');
     document.getElementById('screen-main').classList.add('active');
     document.getElementById('topRole').textContent = role==='admin' ? 'Administrador' : 'Vendedor';
+    const cloudBtn = document.getElementById('btnCloudSync');
+    if(cloudBtn) cloudBtn.classList.toggle('hidden', !app.userId);
     applySettings();
     buildNav();
     this.go(role==='admin' ? 'home' : 'sales');
@@ -1589,7 +1594,16 @@ function renderPriceRows(){
       ${window._editingProduct.prices.length>1?`<button class="btn btn-danger btn-sm" onclick="removePriceRow(${i})">✕</button>`:''}
     </div>`).join('');
 }
-function addPriceRow(){ window._editingProduct.prices.push({label:'',price:0}); renderPriceRows(); }
+function addPriceRow(){
+  // Antes, un precio nuevo se creaba con etiqueta vacía ('') y, si el usuario no llegaba a
+  // escribirle un nombre, saveProduct() lo descartaba EN SILENCIO al guardar (filtraba por
+  // label no vacío). Resultado: el producto se quedaba con un solo precio y el selector de
+  // precios nunca aparecía a la hora de vender, aunque el usuario "sí" había agregado uno.
+  // Ahora cada precio nuevo nace con un nombre por defecto, así nunca se pierde.
+  const n = window._editingProduct.prices.length + 1;
+  window._editingProduct.prices.push({label:'Precio '+n, price:0});
+  renderPriceRows();
+}
 function removePriceRow(i){ window._editingProduct.prices.splice(i,1); renderPriceRows(); }
 
 document.getElementById('fileInputHidden').addEventListener('change', function(e){
@@ -1634,7 +1648,10 @@ function saveProduct(){
     costPrice: fpCostInCP(),
     stock: currentStock,
     minStock: parseFloat(document.getElementById('fpMin').value)||0,
-    prices: ep.prices.filter(pr=>pr.label.trim()!=='').map(pr=>({label:pr.label.trim(),price:pr.price||0})),
+    // Ya NO se descartan los precios sin etiqueta (eso era el bug real de "los precios
+    // múltiples no funcionan"): si alguien dejó el nombre en blanco, se le pone un nombre
+    // por defecto en vez de perder el precio completo.
+    prices: ep.prices.map((pr,i)=>({label: (pr.label||'').trim() || ('Precio '+(i+1)), price: pr.price||0})),
     createdAt: ep.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -2065,6 +2082,22 @@ function renderPosResults(){
       <div class="li-right"><div class="li-price mono">${fmt(p.prices[0]?p.prices[0].price:0)}</div>${fmtUsdLine(p.prices[0]?p.prices[0].price:0)}</div>
     </div>`).join('');
 }
+function cartLinePrice(l, p){
+  if(l.customPrice!=null) return l.customPrice;
+  return p.prices[l.priceIndex]?p.prices[l.priceIndex].price:p.prices[0].price;
+}
+function editCartLinePrice(i){
+  const l = app.cart[i];
+  const p = DB.products.find(p=>p.id===l.productId);
+  if(!p) return;
+  const current = cartLinePrice(l, p);
+  const val = prompt('Precio para '+p.name+' (deja igual para no cambiarlo):', current);
+  if(val===null) return;
+  const num = parseFloat(val);
+  if(isNaN(num) || num<0) return toast('Precio inválido');
+  l.customPrice = num;
+  renderCart();
+}
 function addToCart(pid, qty){
   qty = Math.max(1, Math.floor(qty||1));
   const p = DB.products.find(p=>p.id===pid);
@@ -2091,16 +2124,17 @@ function renderCart(){
   app.cart.forEach((l,i)=>{
     const p = DB.products.find(p=>p.id===l.productId);
     if(!p) return;
-    const price = p.prices[l.priceIndex]?p.prices[l.priceIndex].price:p.prices[0].price;
+    const price = cartLinePrice(l, p);
     const sub = price*l.qty;
     subtotal += sub;
     html += `<div class="cart-line-full">
       <div class="row">
         <div class="li-body">
           <div class="li-title">${esc(p.name)}</div>
-          ${p.prices.length>1?`<select style="margin-top:4px;padding:4px 6px;font-size:calc(11px * var(--font-scale))" onchange="app.cart[${i}].priceIndex=parseInt(this.value);renderCart()">
-            ${p.prices.map((pr,pi)=>`<option value="${pi}" ${pi===l.priceIndex?'selected':''}>${esc(pr.label)} — ${fmt(pr.price)}</option>`).join('')}
+          ${p.prices.length>1?`<select style="margin-top:4px;padding:4px 6px;font-size:calc(11px * var(--font-scale))" onchange="app.cart[${i}].priceIndex=parseInt(this.value);app.cart[${i}].customPrice=null;renderCart()">
+            ${p.prices.map((pr,pi)=>`<option value="${pi}" ${pi===l.priceIndex && l.customPrice==null?'selected':''}>${esc(pr.label)} — ${fmt(pr.price)}</option>`).join('')}
           </select>`:''}
+          <button class="btn btn-ghost btn-sm mt-1" style="padding:2px 8px" onclick="editCartLinePrice(${i})">✏️ ${l.customPrice!=null?'Precio: '+fmt(l.customPrice):'Editar precio'}</button>
         </div>
         <button class="btn btn-danger btn-sm" onclick="app.cart.splice(${i},1);renderCart()">✕</button>
       </div>
@@ -2142,7 +2176,8 @@ function renderCart(){
     ${opts.payment==='transfer'?`<div class="field mt-2" style="margin-bottom:0"><label>Recargo para esta venta (%)</label><input type="number" step="0.1" id="transferPctInput" value="${surchargePct}" oninput="app.saleOptions.transferPct=parseFloat(this.value)||0;updateCartSummary()"></div>`:''}
     <hr class="sep">
     <label>Cliente ${opts.payment==='credit'?'(obligatorio para fiado)':'(opcional)'}</label>
-    ${selectedClient?`<div class="row mt-2"><span class="small">${esc(selectedClient.name)}</span><button class="btn btn-ghost btn-sm" onclick="app.saleOptions.clientId=null;renderCart()">Quitar</button></div>`
+    ${selectedClient?`<div class="row mt-2"><span class="small">${esc(selectedClient.name)}</span><button class="btn btn-ghost btn-sm" onclick="app.saleOptions.clientId=null;renderCart()">Quitar</button></div>
+      <button class="btn btn-outline btn-block btn-sm mt-2" onclick="depositCartToClient()">📦 Depositar en su almacén (en vez de vender)</button>`
       :`<button class="btn btn-outline btn-block mt-2" onclick="openClientPicker(function(cid){app.saleOptions.clientId=cid;renderCart()})">👤 Elegir cliente</button>`}
     <hr class="sep">
     <label class="row" style="cursor:pointer" onclick="app.saleOptions.delivery=!app.saleOptions.delivery;renderCart()">
@@ -2157,6 +2192,7 @@ function renderCart(){
   </div>
   <div class="gap-2">
     <button class="btn btn-outline btn-block" onclick="app.cart=[];resetSaleOptions();renderCart()">Vaciar</button>
+    <button class="btn btn-outline btn-block" onclick="saveCartAsOrder()">📋 Pedido</button>
     <button class="btn btn-primary btn-block" onclick="checkout()">Cobrar</button>
   </div>`;
   wrap.innerHTML = html;
@@ -2176,7 +2212,7 @@ function updateCartSummary(){
   app.cart.forEach(l=>{
     const p = DB.products.find(p=>p.id===l.productId);
     if(!p) return;
-    const price = p.prices[l.priceIndex]?p.prices[l.priceIndex].price:p.prices[0].price;
+    const price = cartLinePrice(l, p);
     subtotal += price*l.qty;
   });
   const opts = app.saleOptions;
@@ -2214,6 +2250,45 @@ function bumpCartQty(i, n){
   l.qty = newQty;
   renderCart();
 }
+function depositCartToClient(){
+  const opts = app.saleOptions;
+  if(!opts.clientId) return toast('Elige un cliente primero');
+  if(!app.cart.length) return toast('Agrega productos primero');
+  for(const l of app.cart){
+    const p = DB.products.find(p=>p.id===l.productId);
+    if(!p || l.qty>p.stock) return toast('No hay suficiente stock de "'+(p?p.name:'?')+'"');
+  }
+  const clientId = opts.clientId;
+  const cartItems = app.cart.map(l=>({productId:l.productId, qty:l.qty}));
+  app.cart = [];
+  resetSaleOptions();
+  openClientDepositForm(clientId);
+  window._consignCart = cartItems;
+  renderConsignLines();
+}
+function saveCartAsOrder(){
+  if(!app.cart.length) return toast('Agrega productos primero');
+  const opts = app.saleOptions;
+  let clientId = opts.clientId || null;
+  let clientName = '';
+  if(!clientId){
+    const name = prompt('¿A nombre de quién es este pedido? (o cancela y elige un cliente arriba con "👤 Elegir cliente")');
+    if(!name) return;
+    clientName = name.trim();
+  }
+  const items = app.cart.map(l=>{
+    const p = DB.products.find(p=>p.id===l.productId);
+    return {productId:l.productId, name:p.name, qty:l.qty, price:cartLinePrice(l, p)};
+  });
+  const o = { id:uid(), clientId, clientName: clientId?'':clientName, items, status:'pedido', note:'', createdAt:new Date().toISOString(), updatedAt:new Date().toISOString() };
+  DB.orders.push(o);
+  app.cart = [];
+  resetSaleOptions();
+  save();
+  toast('Pedido guardado');
+  sendPushToOthers('🧺 Nuevo pedido', 'Pedido de '+(clientId?(DB.clients.find(c=>c.id===clientId)||{}).name:clientName)+' por acomodar', 'order-new');
+  app.go('orders');
+}
 function checkout(){
   if(!app.cart.length) return;
   const opts = app.saleOptions;
@@ -2222,8 +2297,8 @@ function checkout(){
   }
   const items = app.cart.map(l=>{
     const p = DB.products.find(p=>p.id===l.productId);
-    const price = p.prices[l.priceIndex]?p.prices[l.priceIndex].price:p.prices[0].price;
-    return {productId:l.productId, name:p.name, qty:l.qty, priceLabel:p.prices[l.priceIndex]?p.prices[l.priceIndex].label:p.prices[0].label, price, costPriceAtSale: p.costPrice||0};
+    const price = cartLinePrice(l, p);
+    return {productId:l.productId, name:p.name, qty:l.qty, priceLabel:l.customPrice!=null?'Precio ajustado':(p.prices[l.priceIndex]?p.prices[l.priceIndex].label:p.prices[0].label), price, costPriceAtSale: p.costPrice||0};
   });
   const subtotal = items.reduce((a,l)=>a+l.qty*l.price,0);
   const surchargePct = opts.payment==='transfer' ? (opts.transferPct!=null ? opts.transferPct : (DB.settings.transferSurchargePct||0)) : 0;
@@ -2538,7 +2613,7 @@ function openClientReportSaleForm(clientId){
   }).join('');
   ui.openSheet(`
     <div class="sheet-header"><div class="sheet-title">Venta reportada — ${esc(c.name)}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
-    <div class="small muted" style="margin-bottom:8px">Escribe cuánto vendió de cada producto. Se usa el precio congelado que tiene con este cliente; esto se sumará a su deuda.</div>
+    <div class="small muted" style="margin-bottom:8px">Escribe cuánto vendió de cada producto. Se usa el precio congelado que tiene con este cliente. Se cuenta como cobrado de inmediato — no queda pendiente como deuda.</div>
     <div class="card">${rows}</div>
     <div class="row mt-3"><span style="font-weight:800">Total</span><span class="mono" style="font-weight:800" id="csTotalLabel">${fmt(0)}</span></div>
     <button class="btn btn-primary btn-block mt-2" onclick="saveClientReportedSale('${clientId}')">Guardar venta</button>
@@ -2573,10 +2648,18 @@ function saveClientReportedSale(clientId){
     total += qty*price;
   }
   if(!items.length) return toast('Escribe alguna cantidad vendida');
-  DB.clientSales.push({id:uid(), clientId, date:new Date().toISOString(), items, total, createdAt:new Date().toISOString()});
+  const saleId = uid();
+  const nowIso = new Date().toISOString();
+  DB.clientSales.push({id:saleId, clientId, date:nowIso, items, total, createdAt:nowIso});
+  // Antes esto quedaba como deuda pendiente hasta registrar un pago aparte. Ahora, tal como
+  // se pidió, se considera cobrado en el mismo momento en que se reporta la venta — se
+  // registra automáticamente el pago que compensa esa deuda, sin un paso extra.
+  if(total>0){
+    DB.clientPayments.push({id:uid(), clientId, amount:total, note:'Cobro automático de venta reportada', date:nowIso, createdAt:nowIso, autoFromSaleId:saleId});
+  }
   save();
   ui.closeSheet();
-  toast('Venta del cliente registrada');
+  toast('Venta del cliente registrada y cobrada');
   openClientDetail(clientId);
 }
 
@@ -2714,9 +2797,33 @@ function openClientForm(id, onSave){
     </div>
     <div class="field"><label>Descripción</label><textarea id="cfDesc" rows="2" placeholder="Notas sobre el cliente (opcional)">${c?esc(c.desc||''):''}</textarea></div>
     <button class="btn btn-primary btn-block" onclick="saveClientForm()">Guardar cliente</button>
-    ${c?`<button class="btn btn-outline btn-block mt-2" style="color:var(--danger)" onclick="if(confirm('¿Eliminar este cliente? No se borra su historial de ventas.')){DB.clients=DB.clients.filter(x=>x.id!=='${c.id}');save();ui.closePicker();ui.closeSheet();}">Eliminar cliente</button>`:''}
+    ${c?`<button class="btn btn-outline btn-block mt-2" style="color:var(--danger)" onclick="removeClient('${c.id}')">Eliminar cliente</button>`:''}
   `);
   setTimeout(()=>{ const i=document.getElementById('cfName'); if(i) i.focus(); }, 150);
+}
+function removeOrder(id){
+  if(!confirm('¿Eliminar este pedido?')) return;
+  DB.orders = DB.orders.filter(x=>x.id!==id);
+  if(app.userId){
+    sb.from('orders').delete().eq('id', id).then(({error})=>{
+      if(error) console.error('No se pudo borrar el pedido en la nube', error);
+    });
+  }
+  const set = _syncedIds['orders']; if(set) set.delete(id);
+  save(); ui.closeSheet(); renderView();
+}
+function removeClient(id){
+  if(!confirm('¿Eliminar este cliente? No se borra su historial de ventas.')) return;
+  DB.clients = DB.clients.filter(x=>x.id!==id);
+  // Borrado explícito y puntual en la nube — acción directa del usuario sobre un registro
+  // concreto, igual que removeReminder. No depende de ningún borrado automático por diferencia.
+  if(app.userId){
+    sb.from('clients').delete().eq('id', id).then(({error})=>{
+      if(error) console.error('No se pudo borrar el cliente en la nube', error);
+    });
+  }
+  const set = _syncedIds['clients']; if(set) set.delete(id);
+  save(); ui.closePicker(); ui.closeSheet();
 }
 function supportsContactPicker(){
   return ('contacts' in navigator) && ('ContactsManager' in window);
@@ -3781,15 +3888,14 @@ function openOrderDetail(id){
     actions = `
       <button class="btn btn-outline btn-block mt-2" onclick="openProductSearch(function(pid){ addOrderDetailItem('${id}', pid); })">🔎 Agregar producto</button>
       <button class="btn btn-ghost btn-block btn-sm mt-1" onclick="promptFreeOrderDetailItem('${id}')">+ Agregar algo fuera de inventario</button>
-      <button class="btn btn-primary btn-block mt-3" onclick="openConfirmOrderAsSale('${id}')">✅ Confirmar como venta</button>
-      <button class="btn btn-outline btn-block mt-2" onclick="confirmOrderAsDeposit('${id}')">📦 Confirmar como depósito en su almacén</button>`;
+      <button class="btn btn-primary btn-block mt-3" onclick="openConfirmOrder('${id}')">✅ Confirmar pedido</button>`;
   } else if(o.status==='confirmado'){
-    actions = `<div class="small muted" style="margin:6px 0">Se confirmó como <b>${o.kind==='deposito'?'depósito en almacén':'venta'}</b>. Los productos ya no se editan aquí — para corregir algo usa devoluciones o ajuste de deuda desde el perfil del cliente.</div>
-      ${o.kind==='venta' && o.saleId ? `<button class="btn btn-outline btn-block mt-2" onclick="openEditSaleCreditSplit('${o.saleId}')">✏️ Corregir qué quedó a crédito</button>` : ''}
+    actions = `<div class="small muted" style="margin:6px 0">Se confirmó como <b>${o.kind==='deposito'?'depósito en almacén':(o.kind==='mixto'?'venta + depósito (mixto)':'venta')}</b>. Los productos ya no se editan aquí — para corregir algo usa devoluciones o ajuste de deuda desde el perfil del cliente.</div>
+      ${(o.kind==='venta'||o.kind==='mixto') && o.saleId ? `<button class="btn btn-outline btn-block mt-2" onclick="openEditSaleCreditSplit('${o.saleId}')">✏️ Corregir qué quedó a crédito</button>` : ''}
       <button class="btn btn-primary btn-block mt-2" onclick="setOrderStatus('${id}','entregado')">🚚 Marcar entregado</button>`;
   } else if(o.status==='entregado'){
     actions = `<div class="small muted" style="margin:6px 0">Entregado${o.deliveredAt?' el '+new Date(o.deliveredAt).toLocaleDateString('es-MX'):''}.</div>
-      ${o.kind==='venta' && o.saleId ? `<button class="btn btn-outline btn-block mt-2" onclick="openEditSaleCreditSplit('${o.saleId}')">✏️ Corregir qué quedó a crédito</button>` : ''}`;
+      ${(o.kind==='venta'||o.kind==='mixto') && o.saleId ? `<button class="btn btn-outline btn-block mt-2" onclick="openEditSaleCreditSplit('${o.saleId}')">✏️ Corregir qué quedó a crédito</button>` : ''}`;
   }
   ui.openSheet(`
     <div class="sheet-header"><div class="sheet-title">${esc(name)} · ${orderStatusLabel(o.status)}</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
@@ -3797,7 +3903,7 @@ function openOrderDetail(id){
     <div class="row mt-2"><span style="font-weight:800">Total</span><span class="mono" style="font-weight:800">${fmt(orderTotal(o))}</span></div>
     <div class="field mt-2"><label>Nota</label><textarea id="orderNote" rows="2" onchange="updateOrderNote('${id}', this.value)">${esc(o.note||'')}</textarea></div>
     ${actions}
-    ${o.status!=='entregado'?`<button class="btn btn-ghost btn-block mt-2" style="color:var(--danger)" onclick="if(confirm('¿Eliminar este pedido?')){DB.orders=DB.orders.filter(x=>x.id!=='${id}');save();ui.closeSheet();renderView();}">Eliminar pedido</button>`:''}
+    ${o.status!=='entregado'?`<button class="btn btn-ghost btn-block mt-2" style="color:var(--danger)" onclick="removeOrder('${id}')">Eliminar pedido</button>`:''}
   `);
 }
 function updateOrderNote(id, val){
@@ -3847,49 +3953,88 @@ function removeOrderDetailItem(id, idx){
   openOrderDetail(id);
 }
 
-function openConfirmOrderAsSale(id){
+function openConfirmOrder(id){
   const o = DB.orders.find(o=>o.id===id);
   if(!o) return;
   if(!o.items.length) return toast('El pedido no tiene productos');
   window._confirmOrderId = id;
-  const rows = o.items.map((it,i)=>`
-    <div class="list-item">
-      <div class="li-body"><div class="li-title">${esc(it.name)}</div><div class="li-sub">${it.qty} x ${fmt(it.price)} = ${fmt(it.qty*it.price)}</div></div>
-      <div style="width:90px">
-        <label class="small muted">A crédito</label>
-        <input type="number" class="mono" id="creditQty_${i}" value="0" min="0" max="${it.qty}" step="1" style="width:100%;text-align:right">
-      </div>
-    </div>`).join('');
-  ui.openPicker(`
-    <div class="sheet-header"><div class="sheet-title">¿Cuánto de cada producto queda a deber?</div><button class="sheet-close" onclick="ui.closePicker()">✕</button></div>
-    <div class="small muted" style="margin-bottom:8px">Deja en 0 lo que se pagó ahí mismo. Puedes dejar a crédito solo una parte de la cantidad, no todo el producto.</div>
-    ${!o.clientId?`<div class="small muted" style="margin-bottom:8px;color:var(--danger)">Este pedido no tiene un cliente con ficha — no se puede dejar nada a crédito. Deja todo en 0, o vuelve atrás y asígnale un cliente.</div>`:''}
-    <div class="card">${rows}</div>
-    <button class="btn btn-primary btn-block mt-3" onclick="confirmOrderAsSale('${id}')">Confirmar venta</button>
-  `);
+  window._confirmOrderMode = o.items.map(()=>'venta');
+  renderConfirmOrderSheet(id);
 }
-function confirmOrderAsSale(id){
+function renderConfirmOrderSheet(id){
   const o = DB.orders.find(o=>o.id===id);
   if(!o) return;
-  const items = o.items.map((it,i)=>{
-    let creditQty = parseFloat(document.getElementById('creditQty_'+i).value)||0;
+  const modes = window._confirmOrderMode;
+  const rows = o.items.map((it,i)=>{
+    const canDeposit = !!(it.productId && o.clientId);
+    const mode = modes[i];
+    return `<div class="list-item" style="flex-direction:column;align-items:stretch;gap:6px">
+      <div class="li-body"><div class="li-title">${esc(it.name)}</div><div class="li-sub">${it.qty} x ${fmt(it.price)} = ${fmt(it.qty*it.price)}</div></div>
+      <div class="gap-2">
+        <button class="btn ${mode==='venta'?'btn-primary':'btn-outline'} btn-block btn-sm" onclick="setConfirmOrderMode(${i},'venta')">💰 Venta</button>
+        <button class="btn ${mode==='deposito'?'btn-primary':'btn-outline'} btn-block btn-sm" ${canDeposit?'':'disabled'} onclick="setConfirmOrderMode(${i},'deposito')">📦 Depósito</button>
+      </div>
+      ${mode==='venta'?`<div style="width:130px;align-self:flex-end"><label class="small muted">A crédito</label><input type="number" class="mono" id="confCreditQty_${i}" value="0" min="0" max="${it.qty}" step="1" style="width:100%;text-align:right"></div>`:''}
+      ${!canDeposit && !it.productId?`<div class="small muted">Fuera de inventario: solo puede ser venta.</div>`:''}
+    </div>`;
+  }).join('');
+  ui.openPicker(`
+    <div class="sheet-header"><div class="sheet-title">Confirmar pedido</div><button class="sheet-close" onclick="ui.closePicker()">✕</button></div>
+    <div class="small muted" style="margin-bottom:8px">Elige, producto por producto, si se cobra ahora (venta, con lo que quede a crédito) o si queda en el almacén de este cliente (depósito).${!o.clientId?' <b style="color:var(--danger)">Este pedido no tiene un cliente con ficha — no se puede depositar nada, todo debe ser venta.</b>':''}</div>
+    <div class="card">${rows}</div>
+    <button class="btn btn-primary btn-block mt-3" onclick="saveConfirmOrder('${id}')">Confirmar</button>
+  `);
+}
+function setConfirmOrderMode(i, mode){
+  const o = DB.orders.find(o=>o.id===window._confirmOrderId);
+  if(!o) return;
+  if(mode==='deposito' && (!o.clientId || !o.items[i].productId)){
+    toast(!o.clientId?'Este pedido no tiene cliente con ficha, no se puede depositar':'Ese producto no está en el inventario, no se puede depositar');
+    return;
+  }
+  window._confirmOrderMode[i] = mode;
+  renderConfirmOrderSheet(window._confirmOrderId);
+}
+function saveConfirmOrder(id){
+  const o = DB.orders.find(o=>o.id===id);
+  if(!o) return;
+  const modes = window._confirmOrderMode;
+  const ventaItems = [], depositoItems = [];
+  o.items.forEach((it,i)=>{
+    if(modes[i]==='deposito'){ depositoItems.push(it); return; }
+    let creditQty = parseFloat((document.getElementById('confCreditQty_'+i)||{}).value)||0;
     if(!o.clientId) creditQty = 0;
     creditQty = Math.max(0, Math.min(creditQty, it.qty));
-    return {productId:it.productId, name:it.name, price:it.price, qty:it.qty, creditQty};
+    ventaItems.push({productId:it.productId, name:it.name, price:it.price, qty:it.qty, creditQty});
   });
-  const allCash = items.every(it=>it.creditQty===0);
-  const allCredit = items.every(it=>it.creditQty===it.qty);
-  const payment = allCash ? 'cash' : (allCredit ? 'credit' : 'mixed');
-  const sale = {
-    id: uid(), date: new Date().toISOString(), clientId: o.clientId||null,
-    payment, total: orderTotal(o), items
-  };
-  DB.sales.push(sale);
+  for(const it of depositoItems){
+    const p = DB.products.find(p=>p.id===it.productId);
+    if(!p || p.stock < it.qty){ toast('No hay suficiente stock de "'+it.name+'" para depositar'); return; }
+  }
+  let saleId = null;
+  if(ventaItems.length){
+    const allCash = ventaItems.every(it=>it.creditQty===0);
+    const allCredit = ventaItems.every(it=>it.creditQty===it.qty);
+    const payment = allCash ? 'cash' : (allCredit ? 'credit' : 'mixed');
+    const total = ventaItems.reduce((a,it)=>a+it.qty*it.price,0);
+    const sale = { id:uid(), date:new Date().toISOString(), clientId:o.clientId||null, payment, total, items:ventaItems };
+    DB.sales.push(sale);
+    saleId = sale.id;
+  }
+  if(depositoItems.length){
+    DB.consignments.push({id:uid(), clientId:o.clientId, date:new Date().toISOString(), items:depositoItems.map(it=>({productId:it.productId, qty:it.qty})), createdAt:new Date().toISOString()});
+    depositoItems.forEach(it=>{
+      if(getClientProductPrice(o.clientId, it.productId)==null) setClientProductPrice(o.clientId, it.productId, it.price);
+    });
+  }
   recomputeStock();
-  o.status = 'confirmado'; o.kind = 'venta'; o.saleId = sale.id; o.updatedAt = new Date().toISOString();
+  o.status = 'confirmado';
+  o.kind = ventaItems.length && depositoItems.length ? 'mixto' : (depositoItems.length ? 'deposito' : 'venta');
+  o.saleId = saleId;
+  o.updatedAt = new Date().toISOString();
   save();
   ui.closePicker(); ui.closeSheet();
-  toast('Pedido confirmado como venta');
+  toast('Pedido confirmado');
   sendPushToOthers('✅ Pedido listo', 'El pedido de '+(o.clientName||(DB.clients.find(c=>c.id===o.clientId)||{}).name)+' ya está listo para entregar', 'order-ready');
   renderView();
 }
@@ -3927,31 +4072,6 @@ function saveEditSaleCreditSplit(saleId){
   toast('Corregido');
   renderView();
 }
-function confirmOrderAsDeposit(id){
-  const o = DB.orders.find(o=>o.id===id);
-  if(!o) return;
-  if(!o.clientId){ toast('Para depositar en su almacén, el pedido necesita un cliente con ficha'); return; }
-  const catalogItems = o.items.filter(it=>it.productId);
-  const freeItems = o.items.filter(it=>!it.productId);
-  if(!catalogItems.length){ toast('Ninguno de estos productos está en el inventario, no se puede depositar'); return; }
-  for(const it of catalogItems){
-    const p = DB.products.find(p=>p.id===it.productId);
-    if(!p || p.stock < it.qty){ toast('No hay suficiente stock de "'+it.name+'" para depositar'); return; }
-  }
-  DB.consignments.push({id:uid(), clientId:o.clientId, date:new Date().toISOString(), items:catalogItems.map(it=>({productId:it.productId, qty:it.qty})), createdAt:new Date().toISOString()});
-  catalogItems.forEach(it=>{
-    if(getClientProductPrice(o.clientId, it.productId)==null) setClientProductPrice(o.clientId, it.productId, it.price);
-  });
-  recomputeStock();
-  o.status = 'confirmado'; o.kind = 'deposito'; o.updatedAt = new Date().toISOString();
-  if(freeItems.length) o.note = (o.note?o.note+' · ':'') + 'Nota: '+freeItems.map(it=>it.name+' x'+it.qty).join(', ')+' no se pudieron depositar (fuera de inventario)';
-  save();
-  ui.closeSheet();
-  toast('Pedido confirmado como depósito' + (freeItems.length?' (algunos productos no se pudieron depositar)':''));
-  sendPushToOthers('✅ Pedido listo', 'El pedido de '+(DB.clients.find(c=>c.id===o.clientId)||{}).name+' ya está listo para entregar', 'order-ready');
-  renderView();
-}
-
 function viewSettings(){
   const isAdmin = app.role==='admin';
   let html = `<div class="section-title">Negocio</div>
@@ -4061,15 +4181,6 @@ function viewSettings(){
   </div>`;
 
   if(isAdmin){ setTimeout(renderDenomEditList, 0); setTimeout(renderQtyStepsEditList, 0); }
-
-  if(app.userId){
-    html += `<div class="section-title">☁️ Sincronización con la nube</div>
-    <div class="card stack">
-      <div class="small muted" style="margin-bottom:2px">Sube primero lo que cambiaste en este teléfono y después trae lo que falte de los demás. Nunca borra nada que hayas creado o editado aquí.</div>
-      <button class="btn btn-primary btn-block" id="manualSyncBtn" onclick="manualSyncNow()">☁️ Sincronizar ahora</button>
-      <div class="small muted mt-2" id="manualSyncStatus">${DB.lastCloudSyncAt? 'Última sincronización: '+esc(DB.lastCloudSyncAt) : ''}</div>
-    </div>`;
-  }
 
   html += `<div class="section-title">Actualizar la aplicación</div>
   <div class="card stack">
@@ -4226,6 +4337,12 @@ function tryApplyPendingUpdate(){
 }
 setInterval(silentAutoUpdateCheck, 5*60*1000); // revisa en silencio cada 5 minutos
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ silentAutoUpdateCheck(); tryApplyPendingUpdate(); } });
+// Refresco silencioso de la tasa del dólar cada 1 hora mientras la app esté abierta —
+// antes solo se refrescaba al iniciar sesión, así que si el teléfono se quedaba con la
+// app abierta muchas horas la tasa se quedaba vieja hasta el próximo login.
+setInterval(()=>{
+  if(app.userId && (DB.settings.eltoqueApiKey||'').trim()) fetchEltoqueRate(true);
+}, 60*60*1000);
 
 async function checkForUpdate(){
   if(!('serviceWorker' in navigator)){
@@ -4597,7 +4714,7 @@ document.getElementById('restoreInputHidden').addEventListener('change', functio
   reader.readAsText(file);
   e.target.value='';
 });
-function resetApp(){
+async function resetApp(){
   if(!app.userId){
     if(!confirm('Esto borrará TODOS los datos (productos, ventas, compras, etc). ¿Seguro?')) return;
     if(!confirm('Última confirmación: esta acción no se puede deshacer. ¿Restablecer todo?')) return;
@@ -4605,10 +4722,22 @@ function resetApp(){
     save(); applySettings(); toast('Aplicación restablecida'); app.go('home');
     return;
   }
-  const typed = prompt('Esto borra TODOS los datos del negocio para TODO EL EQUIPO (no solo este teléfono): productos, ventas, clientes, todo. No se puede deshacer.\n\nEscribe BORRAR TODO para confirmar:');
+  const typed = prompt('Esto borra TODOS los datos del negocio para TODO EL EQUIPO (no solo este teléfono), incluida la nube: productos, ventas, clientes, todo. No se puede deshacer.\n\nEscribe BORRAR TODO para confirmar:');
   if(typed !== 'BORRAR TODO'){ toast('Cancelado, no se borró nada'); return; }
+  toast('Borrando en la nube, un momento...');
+  // Se borra la nube PRIMERO y se espera a que termine, y solo DESPUÉS se reemplaza el DB
+  // local por uno nuevo (que sí se vuelve a subir). Si se hiciera al revés, la subida del
+  // DB local nuevo podría cruzarse con el borrado y el reset quedaría a medias.
+  const tables = ['products','categories','clients','reminders','orders',
+    'purchases','sales','client_payments','client_debt_adjustments','consignments','client_returns',
+    'client_sales','expenses','losses','stock_adjustments','cash_counts','calendar_events','calendar_notes'];
+  for(const t of tables){
+    try{ await sb.from(t).delete().not('id','is', null); }catch(err){ console.error('Reset '+t, err); }
+  }
+  try{ await sb.from('client_product_prices').delete().not('client_id','is', null); }catch(err){ console.error('Reset client_product_prices', err); }
+  Object.keys(_syncedIds).forEach(k=>_syncedIds[k]=new Set());
   DB = defaultDB();
-  save(); applySettings(); toast('Aplicación restablecida para todo el equipo'); app.go('home');
+  save(); applySettings(); toast('Aplicación restablecida para todo el equipo, incluida la nube'); app.go('home');
 }
 
 applySettings();
