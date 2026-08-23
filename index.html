@@ -354,6 +354,16 @@ hr.sep{border:none;border-top:1px solid var(--border);margin:14px 0;}
    ========================================================= */
 
 const STORE_KEY = 'almacenpro_db_v1';
+
+// Clave de API de elTOQUE FIJADA en el código. Antes vivía solo en DB.settings.eltoqueApiKey
+// (editable en Ajustes y sincronizada a app_settings.eltoque_api_key en la nube): al
+// "Restablecer aplicación", DB volvía a defaultDB() SIN esta clave, y esa versión vacía se
+// subía a la nube, borrándola también ahí. Ahora defaultDB() ya nace con esta clave puesta,
+// así que restablecer la aplicación nunca más la borra. Coincide con el mismo respaldo que
+// ya tiene la función de servidor "update-usd-rate" en Supabase, así que aunque algo fallara
+// en el teléfono, la actualización de la tasa del dólar sigue funcionando de todos modos.
+const ELTOQUE_API_KEY_DEFAULT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc4NzA4OTkwNCwianRpIjoiNjdjZmFlYzUtNGY2MC00MjY5LThmOWUtZWE4NTZlYzA1ODhjIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjZhN2ZiZDIzYzU5NGZhNTY0OGY0ZGFlYyIsIm5iZiI6MTc4NzA4OTkwNCwiY3NyZiI6IjQ4Y2ViNmUyLTE2YmItNGM3YS1hOGZhLTFjOTMxMTRhMWExYSJ9.tvm6nT7FNcq2iVazwWLXFrvl_75ipXXpU_jpe613pjg';
+function getEltoqueKey(){ return (DB.settings.eltoqueApiKey||'').trim() || ELTOQUE_API_KEY_DEFAULT; }
 const THEMES = {
   verde:    {label:'Verde',    primary:'#173F38', primary2:'#2A6357', accent:'#DE9A3C', accentInk:'#3A2A0D'},
   azul:     {label:'Azul',     primary:'#173A56', primary2:'#2A5C82', accent:'#3CA7DE', accentInk:'#072436'},
@@ -423,7 +433,7 @@ function defaultDB(){
     clientSales:[],
     clientProductPrices:{},
     orders:[],
-    settings:{fontScale:1, theme:'verde', themeMode:'light', accentOverride:null, cashDenoms:[1000,500,200,100,50,20,10,5,2,1], usdRate:0, usdRateUpdated:'', defaultMinStock:5, qtySteps:[5,10,20,24], transferSurchargePct:0, notifEnabled:false,
+    settings:{fontScale:1, theme:'verde', themeMode:'light', accentOverride:null, cashDenoms:[1000,500,200,100,50,20,10,5,2,1], usdRate:0, usdRateUpdated:'', eltoqueApiKey:ELTOQUE_API_KEY_DEFAULT, defaultMinStock:5, qtySteps:[5,10,20,24], transferSurchargePct:0, notifEnabled:false,
       vendorPermissions:{editInventory:false, reportLosses:false, addClients:false, deleteProducts:false, setUsdRate:false, backupRestore:false}},
     invoiceCounter: 1001,
     saleCounter: 1001
@@ -751,7 +761,7 @@ async function afterAuthSuccess(){
   await syncPullAll();
   startRealtimeSync();
   app._doLogin(profile.role);
-  if((DB.settings.eltoqueApiKey||'').trim()) fetchEltoqueRate(true); // refresco silencioso al entrar
+  fetchEltoqueRate(true); // refresco silencioso al entrar — getEltoqueKey() siempre tiene un valor
 }
 async function checkExistingSession(){
   const { data: { session } } = await sb.auth.getSession();
@@ -780,7 +790,7 @@ async function refreshSessionInBackground(){
     await syncPullAll();
     startRealtimeSync();
     renderView();
-    if((DB.settings.eltoqueApiKey||'').trim()) fetchEltoqueRate(true);
+    fetchEltoqueRate(true); // getEltoqueKey() siempre tiene un valor, no hace falta comprobar antes
   }catch(err){
     console.error('No se pudo sincronizar en segundo plano (¿sin internet?)', err);
   }
@@ -823,7 +833,12 @@ async function syncInsertOnlyTable(table, items, mapFn){
   const newOnes = items.filter(it=>!set.has(it.id));
   if(!newOnes.length) return true;
   const rows = newOnes.map(mapFn);
-  const { error } = await sb.from(table).insert(rows);
+  // upsert + ignoreDuplicates en vez de insert(): si por cualquier motivo (ej. dos teléfonos
+  // sincronizando casi al mismo tiempo, o _syncedIds desactualizado en algún dispositivo) se
+  // repite un id que ya existe, esa fila se ignora en silencio en vez de hacer fallar TODO el
+  // lote — antes, un solo choque de "llave duplicada" bloqueaba también a las filas nuevas de
+  // verdad que iban en el mismo envío.
+  const { error } = await sb.from(table).upsert(rows, {onConflict:'id', ignoreDuplicates:true});
   if(error){ console.error('Sync '+table, error); return false; }
   newOnes.forEach(it=>set.add(it.id));
   return true;
@@ -885,7 +900,11 @@ async function syncPush(){
           return true;
         })(),
         syncUpsertTable('clients', DB.clients, c=>({id:c.id, name:c.name, phone:c.phone||null, description:c.desc||'', data:c})),
-        syncUpsertTable('reminders', DB.reminders, r=>({id:r.id, title:r.title, date:r.date, note:null, done:!!r.done, data:r})),
+        // Antes NO se mandaba "time" aquí: la hora del recordatorio se quedaba en null en la
+        // nube (solo vivía dentro de "data"), así que cualquier revisión hecha desde el
+        // servidor (para el aviso con la app cerrada) no sabía la hora real y asumía "fin del
+        // día". Corregido: ahora se sube igual que se guarda localmente.
+        syncUpsertTable('reminders', DB.reminders, r=>({id:r.id, title:r.title, date:r.date, time:r.time||null, note:null, done:!!r.done, data:r})),
         syncUpsertTable('orders', DB.orders, o=>({id:o.id, client_id:o.clientId||null, status:o.status, created_by:app.userId, updated_at:new Date().toISOString(), data:o})),
         syncInsertOnlyTable('purchases', DB.purchases, pu=>({id:pu.id, date:pu.date, supplier:pu.supplier||null, invoice_no:pu.invoiceNo||null, total:pu.total||0, usd_rate_at_purchase:pu.usdRateAtSale||null, created_by:app.userId, data:pu})),
         syncInsertOnlyTable('sales', DB.sales, s=>({id:s.id, date:s.date, client_id:s.clientId||null, payment:s.payment, total:s.total||0, created_by:app.userId, data:s})),
@@ -1012,24 +1031,42 @@ async function _syncPullAllInner(){
   };
 
   const remoteCats = unwrap(cats);
+  const remoteProds = unwrap(prods);
+  const remoteClis = unwrap(clis);
+  const remoteRems = unwrap(rems);
+  const remoteOrds = unwrap(ords);
+  const remotePurs = unwrap(purs);
+  const remoteSals = unwrap(sals);
+  const remoteCpays = unwrap(cpays);
+  const remoteCadjs = unwrap(cadjs);
+  const remoteCons = unwrap(cons);
+  const remoteCrets = unwrap(crets);
+  const remoteCsals = unwrap(csals);
+  const remoteExps = unwrap(exps);
+  const remoteLoss = unwrap(loss);
+  const remoteSadj = unwrap(sadj);
+  const remoteCcnt = unwrap(ccnt);
+  const remoteCevt = unwrap(cevt);
+  const remoteCnote = unwrap(cnote);
+
   DB.categories = remoteCats.length || DB.categories.length ? mergeArr(DB.categories, remoteCats) : defaultDB().categories;
-  DB.products = mergeArr(DB.products, unwrap(prods));
-  DB.clients = mergeArr(DB.clients, unwrap(clis));
-  DB.reminders = mergeArr(DB.reminders, unwrap(rems));
-  DB.orders = mergeArr(DB.orders, unwrap(ords));
-  DB.purchases = mergeArr(DB.purchases, unwrap(purs));
-  DB.sales = mergeArr(DB.sales, unwrap(sals));
-  DB.clientPayments = mergeArr(DB.clientPayments, unwrap(cpays));
-  DB.clientDebtAdjustments = mergeArr(DB.clientDebtAdjustments, unwrap(cadjs));
-  DB.consignments = mergeArr(DB.consignments, unwrap(cons));
-  DB.clientReturns = mergeArr(DB.clientReturns, unwrap(crets));
-  DB.clientSales = mergeArr(DB.clientSales, unwrap(csals));
-  DB.expenses = mergeArr(DB.expenses, unwrap(exps));
-  DB.losses = mergeArr(DB.losses, unwrap(loss));
-  DB.stockAdjustments = mergeArr(DB.stockAdjustments, unwrap(sadj));
-  DB.cashCounts = mergeArr(DB.cashCounts, unwrap(ccnt));
-  DB.events = mergeArr(DB.events, unwrap(cevt));
-  DB.notes = mergeArr(DB.notes, unwrap(cnote));
+  DB.products = mergeArr(DB.products, remoteProds);
+  DB.clients = mergeArr(DB.clients, remoteClis);
+  DB.reminders = mergeArr(DB.reminders, remoteRems);
+  DB.orders = mergeArr(DB.orders, remoteOrds);
+  DB.purchases = mergeArr(DB.purchases, remotePurs);
+  DB.sales = mergeArr(DB.sales, remoteSals);
+  DB.clientPayments = mergeArr(DB.clientPayments, remoteCpays);
+  DB.clientDebtAdjustments = mergeArr(DB.clientDebtAdjustments, remoteCadjs);
+  DB.consignments = mergeArr(DB.consignments, remoteCons);
+  DB.clientReturns = mergeArr(DB.clientReturns, remoteCrets);
+  DB.clientSales = mergeArr(DB.clientSales, remoteCsals);
+  DB.expenses = mergeArr(DB.expenses, remoteExps);
+  DB.losses = mergeArr(DB.losses, remoteLoss);
+  DB.stockAdjustments = mergeArr(DB.stockAdjustments, remoteSadj);
+  DB.cashCounts = mergeArr(DB.cashCounts, remoteCcnt);
+  DB.events = mergeArr(DB.events, remoteCevt);
+  DB.notes = mergeArr(DB.notes, remoteCnote);
   // Precios congelados por cliente: se completa con lo que falte de la nube, sin pisar un
   // precio que ya se haya fijado localmente y todavía no se haya subido.
   DB.clientProductPrices = DB.clientProductPrices || {};
@@ -1038,16 +1075,23 @@ async function _syncPullAllInner(){
     if(!(k in DB.clientProductPrices)) DB.clientProductPrices[k] = r.price;
   });
 
-  // reconstruir los índices de "ya sincronizado" con lo que acabamos de traer
+  // BUG CRÍTICO CORREGIDO (22 de agosto de 2026): antes, esto marcaba como "ya sincronizado"
+  // todo lo que quedaba en el DB local DESPUÉS de fusionar (DB.products, DB.sales, etc.) — es
+  // decir, también marcaba como sincronizado algo que acababas de crear en ESTE teléfono y que
+  // todavía no había llegado a la nube. Efecto real: ese registro nunca se subía (porque
+  // syncUpsertTable/syncInsertOnlyTable creían que ya estaba arriba) y se quedaba atrapado para
+  // siempre en un solo teléfono — exactamente el síntoma de "en un teléfono sale y en el otro
+  // no". Ahora se marca como sincronizado SOLO lo que la nube confirmó tener de verdad
+  // (remoteProds, remoteSals, etc.), nunca la mezcla local.
   const setIds = (table, arr) => { _syncedIds[table] = new Set(arr.map(it=>it.id)); };
-  setIds('categories', DB.categories); setIds('products', DB.products); setIds('clients', DB.clients);
-  setIds('reminders', DB.reminders); setIds('purchases', DB.purchases); setIds('sales', DB.sales);
-  setIds('orders', DB.orders);
-  setIds('client_payments', DB.clientPayments); setIds('client_debt_adjustments', DB.clientDebtAdjustments);
-  setIds('consignments', DB.consignments); setIds('client_returns', DB.clientReturns);
-  setIds('client_sales', DB.clientSales); setIds('expenses', DB.expenses); setIds('losses', DB.losses);
-  setIds('stock_adjustments', DB.stockAdjustments); setIds('cash_counts', DB.cashCounts);
-  setIds('calendar_events', DB.events); setIds('calendar_notes', DB.notes);
+  setIds('categories', remoteCats); setIds('products', remoteProds); setIds('clients', remoteClis);
+  setIds('reminders', remoteRems); setIds('purchases', remotePurs); setIds('sales', remoteSals);
+  setIds('orders', remoteOrds);
+  setIds('client_payments', remoteCpays); setIds('client_debt_adjustments', remoteCadjs);
+  setIds('consignments', remoteCons); setIds('client_returns', remoteCrets);
+  setIds('client_sales', remoteCsals); setIds('expenses', remoteExps); setIds('losses', remoteLoss);
+  setIds('stock_adjustments', remoteSadj); setIds('cash_counts', remoteCcnt);
+  setIds('calendar_events', remoteCevt); setIds('calendar_notes', remoteCnote);
   _syncedCpp = new Set((cpp.data||[]).map(r=>r.client_id+'::'+r.product_id));
 
   const st = settingsRes.data;
@@ -1056,7 +1100,7 @@ async function _syncPullAllInner(){
     // fontScale, theme, themeMode, accentOverride y notifEnabled son personalización de ESTE
     // dispositivo — nunca se traen de la nube, para que cada teléfono conserve la suya.
     Object.assign(DB.settings, {
-      usdRate:st.usd_rate, usdRateUpdated:st.usd_rate_updated, eltoqueApiKey:st.eltoque_api_key||'',
+      usdRate:st.usd_rate, usdRateUpdated:st.usd_rate_updated, eltoqueApiKey:(st.eltoque_api_key||'').trim() || ELTOQUE_API_KEY_DEFAULT,
       defaultMinStock:st.default_min_stock, transferSurchargePct:st.transfer_surcharge_pct,
       cashDenoms:st.cash_denoms, qtySteps:st.qty_steps,
       vendorPermissions:st.vendor_permissions, adminPassword:st.admin_password||''
@@ -1076,12 +1120,43 @@ function startRealtimeSync(){
     'stock_adjustments','cash_counts','calendar_events','calendar_notes','client_product_prices','app_settings'];
   let ch = sb.channel('almacenpro-sync');
   tables.forEach(t=>{ ch = ch.on('postgres_changes', {event:'*', schema:'public', table:t}, handleRemoteChange); });
-  ch.subscribe();
+  // Antes, si el canal en tiempo real se caía (cambio de red, VPN encendida/apagada, wifi que
+  // pasa a datos móviles, la app en segundo plano mucho rato), nada volvía a intentar
+  // reconectar por sí solo ni a traer lo que se hubiera perdido mientras tanto. Ahora, si el
+  // estado del canal indica error/cierre/tiempo agotado, se reconecta solo y de paso se hace
+  // un syncPullAll() para recuperar cualquier cambio que haya llegado durante la caída.
+  ch.subscribe((status)=>{
+    if(status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED'){
+      _realtimeChannel = null;
+      if(app.userId){
+        setTimeout(()=>{ startRealtimeSync(); syncPullAll().catch(()=>{}); }, 2000);
+      }
+    }
+  });
   _realtimeChannel = ch;
 }
 function stopRealtimeSync(){
   if(_realtimeChannel){ sb.removeChannel(_realtimeChannel); _realtimeChannel = null; }
 }
+// Misma idea, pero para dos casos muy comunes en un teléfono que el canal en tiempo real por sí
+// solo no siempre detecta a tiempo: (1) el sistema operativo cortó la red un momento (avión,
+// túnel, encender/apagar VPN) y el navegador avisa cuando vuelve; (2) la app estuvo en segundo
+// plano (pantalla apagada, cambiaste a otra app) y el teléfono pudo haber pausado la conexión.
+// En ambos casos, se reconecta el canal y se sincroniza de una vez (sube lo pendiente y baja lo
+// que haya cambiado en otro dispositivo mientras tanto) en vez de esperar a que algo dispare la
+// sincronización por casualidad.
+window.addEventListener('online', ()=>{
+  if(!app.userId) return;
+  toast('Conexión recuperada, sincronizando...');
+  stopRealtimeSync();
+  syncPush().then(()=>syncPullAll()).then(()=>startRealtimeSync()).catch(()=>{});
+});
+document.addEventListener('visibilitychange', ()=>{
+  if(!document.hidden && app.userId){
+    if(!_realtimeChannel) startRealtimeSync();
+    syncPush().then(()=>syncPullAll()).catch(()=>{});
+  }
+});
 let _remoteReloadTimer = null;
 function handleRemoteChange(payload){
   if(_syncBusy) return; // es muy probablemente nuestro propio cambio reflejándose
@@ -1689,6 +1764,18 @@ function bumpQtyField(inputId, n, afterFn){
   if(!el) return;
   el.value = Math.max(0, (parseFloat(el.value)||0) + n);
   if(afterFn && typeof window[afterFn]==='function') window[afterFn]();
+}
+// Control compacto de +/- rápido para UNA fila dentro de una lista (a diferencia de
+// qtyStepsHTML, que es para un único campo de un formulario). Se usa en los listados de
+// cliente (venta reportada, devolución) y en los productos de un pedido, para no depender
+// de escribir el número a mano.
+function qtyCtlHTML(inputId, value, afterFn){
+  const af = afterFn ? `'${afterFn}'` : 'null';
+  return `<div class="qty-ctl">
+    <button type="button" class="qty-btn" onclick="bumpQtyField('${inputId}',-1,${af})">−</button>
+    <input type="number" class="mono cart-qty-input" id="${inputId}" value="${value}" style="width:56px" ${afterFn?`oninput="${afterFn}()"`:''}>
+    <button type="button" class="qty-btn" onclick="bumpQtyField('${inputId}',1,${af})">+</button>
+  </div>`;
 }
 
 function openProductDetail(id){
@@ -2524,7 +2611,7 @@ function openClientInventoryAdjustForm(clientId){
     <label class="mt-2">Buscar producto</label>
     <div id="invAdjSelectedBox" class="mt-2"></div>
     <button class="btn btn-outline btn-block mt-2" onclick="openProductSearch(function(pid){selectInvAdjProduct(pid);}, {allowCreate:false})">🔎 Buscar producto</button>
-    <div class="field mt-2"><label>Cantidad real que tiene ahora</label><input type="number" id="invAdjQty" value="0"></div>
+    <div class="field mt-2"><label>Cantidad real que tiene ahora</label>${qtyCtlHTML('invAdjQty', 0, null)}</div>
     <div class="mt-2" id="invAdjQtySteps"></div>
     <button class="btn btn-ghost btn-block mt-2" onclick="addInvAdjLine()">+ Agregar al ajuste</button>
     <div id="invAdjLines" class="stack mt-2"></div>
@@ -2608,7 +2695,7 @@ function openClientReportSaleForm(clientId){
     return `<div class="list-item">
       ${thumbHtml(p)}
       <div class="li-body"><div class="li-title">${esc(p?p.name:'?')}</div><div class="li-sub">Tiene ${stockMap[pid]} · precio ${fmt(price)}</div></div>
-      <div style="width:70px"><input type="number" class="mono" id="csQty_${pid}" value="0" style="width:100%;text-align:right" oninput="computeClientSaleTotal()"></div>
+      <div style="width:110px">${qtyCtlHTML('csQty_'+pid, 0, 'computeClientSaleTotal')}</div>
     </div>`;
   }).join('');
   ui.openSheet(`
@@ -2674,7 +2761,7 @@ function openClientReturnForm(clientId){
     return `<div class="list-item">
       ${thumbHtml(p)}
       <div class="li-body"><div class="li-title">${esc(p?p.name:'?')}</div><div class="li-sub">Tiene ${stockMap[pid]}</div></div>
-      <div style="width:70px"><input type="number" class="mono" id="crQty_${pid}" value="0" style="width:100%;text-align:right"></div>
+      <div style="width:110px">${qtyCtlHTML('crQty_'+pid, 0, null)}</div>
     </div>`;
   }).join('');
   ui.openSheet(`
@@ -3764,7 +3851,7 @@ function saveLoss(){
    PEDIDOS (flujo por etapas: pedido -> preparando -> confirmado -> entregado)
    ========================================================= */
 function orderStatusLabel(s){
-  return {pedido:'🆕 Pedido', preparando:'🧺 Acomodando', confirmado:'✅ Confirmado', entregado:'🚚 Entregado'}[s] || s;
+  return {pedido:'🆕 Pedido', preparando:'🧺 Acomodando', armado:'📦 Armado (por confirmar)', confirmado:'✅ Confirmado', entregado:'🚚 Entregado'}[s] || s;
 }
 function orderTotal(o){
   return (o.items||[]).reduce((a,it)=>a+(it.qty*it.price),0);
@@ -3773,6 +3860,7 @@ function viewOrders(){
   const groups = [
     {status:'pedido', title:'Nuevos pedidos'},
     {status:'preparando', title:'Acomodando'},
+    {status:'armado', title:'Armados (por confirmar)'},
     {status:'confirmado', title:'Confirmados (por entregar)'},
     {status:'entregado', title:'Entregados'}
   ];
@@ -3851,12 +3939,53 @@ function promptFreeOrderItem(){
 function renderOrderItemsList(editable, order){
   const items = order ? (order.items||[]) : window._orderDraft.items;
   if(!items.length) return `<div class="small muted" style="padding:4px 0">Sin productos todavía</div>`;
-  return items.map((it,i)=>`
-    <div class="list-item">
-      <div class="li-body"><div class="li-title">${esc(it.name)}${it.productId?'':' <span class="small muted">(fuera de inventario)</span>'}</div>
-        <div class="li-sub">${it.qty} x ${fmt(it.price)} = ${fmt(it.qty*it.price)}</div></div>
-      ${editable?`<button class="btn btn-danger btn-sm" onclick="${order?`removeOrderDetailItem('${order.id}',${i})`:`window._orderDraft.items.splice(${i},1);renderOrderFormSheet()`}">✕</button>`:''}
-    </div>`).join('');
+  // Durante "preparando" (acomodando), quien arma el pedido ve un check por producto para ir
+  // tachándolo a medida que lo aparta — esto es solo un checklist, NO decide todavía si el
+  // producto se vende, se fía o se deposita; eso lo decide un paso posterior y separado
+  // ("Confirmar pedido", en el estado "armado"), a propósito, para que sea otra persona/otro
+  // momento el que tome esa decisión.
+  const checklist = order && order.status==='preparando';
+  return items.map((it,i)=>{
+    const inputId = order ? `ordQty_${order.id}_${i}` : `ordDraftQty_${i}`;
+    const qtyChangeAttr = order ? `onchange="setOrderItemQty('${order.id}',${i},this.value)"` : `onchange="setOrderItemQty(null,${i},this.value)"`;
+    const removeAction = editable ? (order?`removeOrderDetailItem('${order.id}',${i})`:`window._orderDraft.items.splice(${i},1);renderOrderFormSheet()`) : null;
+    return `
+    <div class="list-item" style="${it.picked?'opacity:.5':''}">
+      ${checklist?`<button type="button" class="qty-btn" style="font-size:17px" onclick="toggleOrderItemPicked('${order.id}',${i})">${it.picked?'☑️':'⬜'}</button>`:''}
+      <div class="li-body"><div class="li-title" style="${it.picked?'text-decoration:line-through':''}">${esc(it.name)}${it.productId?'':' <span class="small muted">(fuera de inventario)</span>'}</div>
+        <div class="li-sub">${fmt(it.price)} c/u${editable?'':' · '+it.qty+' un.'}</div></div>
+      ${editable?`<div class="qty-ctl">
+        <button type="button" class="qty-btn" onclick="bumpOrderItemQty(${order?`'${order.id}'`:null},${i},-1)">−</button>
+        <input type="number" class="mono cart-qty-input" id="${inputId}" value="${it.qty}" style="width:52px" ${qtyChangeAttr}>
+        <button type="button" class="qty-btn" onclick="bumpOrderItemQty(${order?`'${order.id}'`:null},${i},1)">+</button>
+      </div>`:''}
+      <div class="li-right mono" style="min-width:56px;text-align:right">${fmt(it.qty*it.price)}</div>
+      ${removeAction?`<button class="btn btn-danger btn-sm" onclick="${removeAction}">✕</button>`:''}
+    </div>`;
+  }).join('');
+}
+function bumpOrderItemQty(orderId, i, delta){
+  const items = orderId ? ((DB.orders.find(o=>o.id===orderId)||{}).items) : window._orderDraft.items;
+  if(!items || !items[i]) return;
+  items[i].qty = Math.max(1, (parseFloat(items[i].qty)||0) + delta);
+  if(orderId){ const o=DB.orders.find(o=>o.id===orderId); o.updatedAt=new Date().toISOString(); save(); openOrderDetail(orderId); }
+  else renderOrderFormSheet();
+}
+function setOrderItemQty(orderId, i, val){
+  const items = orderId ? ((DB.orders.find(o=>o.id===orderId)||{}).items) : window._orderDraft.items;
+  if(!items || !items[i]) return;
+  let q = parseFloat(val)||0;
+  if(q<=0){ items.splice(i,1); } else { items[i].qty = q; }
+  if(orderId){ const o=DB.orders.find(o=>o.id===orderId); o.updatedAt=new Date().toISOString(); save(); openOrderDetail(orderId); }
+  else renderOrderFormSheet();
+}
+function toggleOrderItemPicked(orderId, i){
+  const o = DB.orders.find(o=>o.id===orderId);
+  if(!o || !o.items[i]) return;
+  o.items[i].picked = !o.items[i].picked;
+  o.updatedAt = new Date().toISOString();
+  save();
+  openOrderDetail(orderId);
 }
 function saveNewOrder(){
   const d = window._orderDraft;
@@ -3885,10 +4014,17 @@ function openOrderDetail(id){
   if(o.status==='pedido'){
     actions = `<button class="btn btn-primary btn-block mt-2" onclick="setOrderStatus('${id}','preparando')">🧺 Empezar a acomodar</button>`;
   } else if(o.status==='preparando'){
+    const totalItems = o.items.length;
+    const pickedCount = o.items.filter(it=>it.picked).length;
     actions = `
+      <div class="small muted" style="margin:4px 0">Ve tachando cada producto a medida que lo apartas. ${pickedCount}/${totalItems} listos.</div>
       <button class="btn btn-outline btn-block mt-2" onclick="openProductSearch(function(pid){ addOrderDetailItem('${id}', pid); })">🔎 Agregar producto</button>
       <button class="btn btn-ghost btn-block btn-sm mt-1" onclick="promptFreeOrderDetailItem('${id}')">+ Agregar algo fuera de inventario</button>
-      <button class="btn btn-primary btn-block mt-3" onclick="openConfirmOrder('${id}')">✅ Confirmar pedido</button>`;
+      <button class="btn btn-primary btn-block mt-3" onclick="finishPickingOrder('${id}')">☑️ Terminé de acomodar</button>`;
+  } else if(o.status==='armado'){
+    actions = `<div class="small muted" style="margin:6px 0">Ya está acomodado. Falta decidir cómo se cobra cada producto — eso se hace aparte, en "Confirmar pedido".</div>
+      <button class="btn btn-primary btn-block mt-2" onclick="openConfirmOrder('${id}')">✅ Confirmar pedido</button>
+      <button class="btn btn-ghost btn-block btn-sm mt-1" onclick="setOrderStatus('${id}','preparando')">↩️ Volver a acomodar (algo quedó mal)</button>`;
   } else if(o.status==='confirmado'){
     actions = `<div class="small muted" style="margin:6px 0">Se confirmó como <b>${o.kind==='deposito'?'depósito en almacén':(o.kind==='mixto'?'venta + depósito (mixto)':'venta')}</b>. Los productos ya no se editan aquí — para corregir algo usa devoluciones o ajuste de deuda desde el perfil del cliente.</div>
       ${(o.kind==='venta'||o.kind==='mixto') && o.saleId ? `<button class="btn btn-outline btn-block mt-2" onclick="openEditSaleCreditSplit('${o.saleId}')">✏️ Corregir qué quedó a crédito</button>` : ''}
@@ -3912,6 +4048,13 @@ function updateOrderNote(id, val){
   o.note = val; o.updatedAt = new Date().toISOString();
   save();
 }
+function finishPickingOrder(id){
+  const o = DB.orders.find(o=>o.id===id);
+  if(!o) return;
+  const pending = o.items.filter(it=>!it.picked).length;
+  if(pending>0 && !confirm('Todavía quedan '+pending+' producto(s) sin tachar. ¿Seguro que ya terminaste de acomodar?')) return;
+  setOrderStatus(id, 'armado');
+}
 function setOrderStatus(id, status){
   const o = DB.orders.find(o=>o.id===id);
   if(!o) return;
@@ -3921,6 +4064,7 @@ function setOrderStatus(id, status){
   ui.closeSheet();
   toast('Pedido actualizado');
   if(status==='entregado') sendPushToOthers('🚚 Pedido entregado', 'El pedido de '+(o.clientName||(DB.clients.find(c=>c.id===o.clientId)||{}).name)+' ya se entregó', 'order-delivered');
+  if(status==='armado') sendPushToOthers('📦 Pedido armado', 'El pedido de '+(o.clientName||(DB.clients.find(c=>c.id===o.clientId)||{}).name)+' ya está listo — falta confirmar el pago', 'order-armed');
   renderView();
 }
 function addOrderDetailItem(id, pid){
@@ -4254,8 +4398,6 @@ function removeQtyStep(i){
   save(); renderQtyStepsEditList();
 }
 async function fetchEltoqueRate(silent){
-  const key = (DB.settings.eltoqueApiKey||'').trim();
-  if(!key){ if(!silent) toast('Ingresa tu clave de API de elTOQUE primero y guárdala'); return; }
   if(!app.userId){ if(!silent) toast('Necesitas sesión iniciada para actualizar la tasa'); return; }
   if(!silent) toast('Consultando elTOQUE...');
   try{
@@ -4341,7 +4483,7 @@ document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ silent
 // antes solo se refrescaba al iniciar sesión, así que si el teléfono se quedaba con la
 // app abierta muchas horas la tasa se quedaba vieja hasta el próximo login.
 setInterval(()=>{
-  if(app.userId && (DB.settings.eltoqueApiKey||'').trim()) fetchEltoqueRate(true);
+  if(app.userId) fetchEltoqueRate(true); // getEltoqueKey() siempre tiene un valor
 }, 60*60*1000);
 
 async function checkForUpdate(){
