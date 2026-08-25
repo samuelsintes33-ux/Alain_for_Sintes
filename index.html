@@ -211,6 +211,13 @@ label{font-size:calc(12px * var(--font-scale));font-weight:700;color:var(--ink-s
   height:90vh;max-height:90vh;display:flex;flex-direction:column;
   padding:16px 16px calc(12px + env(safe-area-inset-bottom,0px));
   animation:slideup .22s ease-out;
+  /* Antes, si el contenido de una ventana (ej. "Confirmar pedido", con varios productos y
+     botones de venta/depósito) no envolvía su parte scrolleable en .picker-results, no había
+     NINGUNA forma de desplazarse — el contenido que no cabía en el alto fijo simplemente se
+     cortaba, dejando botones inalcanzables en pantallas chicas o con varios productos. Ahora
+     el contenedor entero siempre puede hacer scroll como respaldo, se acuerde o no el código
+     de cada pantalla de usar esa clase. */
+  overflow-y:auto; -webkit-overflow-scrolling:touch;
 }
 .picker-results{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .picker-group-title{font-size:calc(11.5px * var(--font-scale));font-weight:800;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.3px;margin:14px 0 4px;}
@@ -400,7 +407,20 @@ function uid(){
     return v.toString(16);
   });
 }
-function todayISO(){ const d=new Date(); return d.toISOString().slice(0,10); }
+function todayISO(){
+  // ANTES: usaba d.toISOString(), que convierte a UTC. Cuba está en UTC-4, así que desde
+  // aprox. las 8pm hora local, toISOString() ya cae en el día siguiente en UTC — por eso
+  // cualquier cosa que dependiera de "hoy" (recordatorios, fechas por defecto de compras,
+  // ventas, caja, calendario — 18 lugares en total) se adelantaba un día completo por las
+  // noches. Corregido: se arma la fecha con los componentes LOCALES del dispositivo.
+  const d = new Date();
+  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+function nowTimeHHMM(){
+  const d = new Date();
+  return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
 function nowStamp(){ return new Date().toLocaleString('es-MX',{dateStyle:'short',timeStyle:'short'}); }
 function round2(n){ return Math.round((Number(n)||0)*100)/100; }
 function fmt(n){ n = Number(n)||0; return DB.meta.currency + n.toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -700,6 +720,10 @@ document.addEventListener('DOMContentLoaded', ()=>{
 });
 
 async function authSubmit(){
+  // Si todavía hay un cierre de sesión de la cuenta anterior en curso (ver logout()), se
+  // espera a que termine antes de intentar entrar con las credenciales nuevas — evita la
+  // condición de carrera que hacía que a veces se volviera a cargar la cuenta anterior.
+  if(_signOutInFlight) await _signOutInFlight;
   const email = (document.getElementById('authEmail').value||'').trim();
   const password = document.getElementById('authPassword').value||'';
   const errEl = document.getElementById('authError');
@@ -762,6 +786,11 @@ async function afterAuthSuccess(){
   startRealtimeSync();
   app._doLogin(profile.role);
   fetchEltoqueRate(true); // refresco silencioso al entrar — getEltoqueKey() siempre tiene un valor
+  // Si el permiso del navegador ya estaba concedido (de una sesión anterior, u otorgado por
+  // el sistema) pero este dispositivo nunca llegó a quedar registrado en push_subscriptions
+  // (por ejemplo, tras restablecer la aplicación, o si algo falló la primera vez en
+  // silencio), esto lo repara solo, sin que la persona tenga que volver a tocar el botón.
+  if('Notification' in window && Notification.permission==='granted') subscribeToPush(false);
 }
 async function checkExistingSession(){
   const { data: { session } } = await sb.auth.getSession();
@@ -795,10 +824,13 @@ async function refreshSessionInBackground(){
     console.error('No se pudo sincronizar en segundo plano (¿sin internet?)', err);
   }
 }
+let _signOutInFlight = null;
 async function supabaseSignOut(){
   stopRealtimeSync();
   clearCachedProfile();
-  await sb.auth.signOut();
+  _signOutInFlight = sb.auth.signOut();
+  await _signOutInFlight;
+  _signOutInFlight = null;
 }
 
 /* ---------------- SUPABASE: sincronización de datos ---------------- */
@@ -1169,7 +1201,7 @@ function handleRemoteChange(payload){
     checkDueReminders();
     checkLowStockAlerts();
     if('Notification' in window && Notification.permission==='granted'){
-      try{ new Notification('🔄 AlmacénPro', {body:'Otro dispositivo actualizó los datos', tag:'sync-update'}); }catch(e){}
+      try{ const n = new Notification('🔄 AlmacénPro', {body:'Otro dispositivo actualizó los datos', tag:'sync-update', icon:'./icon.png', badge:'./icon.png'}); n.onclick=()=>{ window.focus(); n.close(); }; }catch(e){}
       playPingSound();
     }
     if(isTyping){
@@ -1208,15 +1240,21 @@ const app = {
     this.go(role==='admin' ? 'home' : 'sales');
     window.scrollTo(0,0);
   },
-  logout(){
-    supabaseSignOut();
-    this.role = null;
-    this.userId = null;
-    this.userName = null;
+  async logout(){
+    // ANTES: supabaseSignOut() no se esperaba (sin await) — la pantalla de login aparecía
+    // de inmediato mientras el cierre de sesión de la cuenta anterior todavía seguía en
+    // curso. Si alguien escribía rápido las credenciales de la otra cuenta (o la red iba
+    // lenta), el cierre viejo y el inicio nuevo se cruzaban, y a veces terminaba cargando
+    // otra vez la cuenta anterior. Ahora se espera a que termine de verdad antes de mostrar
+    // el formulario de login.
     document.getElementById('screen-main').classList.remove('active');
     document.getElementById('screen-login').classList.add('active');
     document.getElementById('loginBizName').textContent = DB.meta.bizName || 'AlmacénPro';
     window.scrollTo(0,0);
+    this.role = null;
+    this.userId = null;
+    this.userName = null;
+    await supabaseSignOut();
   },
   go(view){
     this.view = view;
@@ -3548,11 +3586,24 @@ function viewReminders(){
   let html = '';
   if(!('Notification' in window)){
     html += `<div class="card small muted">Este navegador no admite notificaciones. Los recordatorios igual se guardan y se muestran aquí y en Inicio.</div>`;
+  } else if(Notification.permission==='denied'){
+    html += `<div class="card">
+      <div class="small">🔕 Bloqueaste las notificaciones para esta app. Para recibir avisos de recordatorios y pedidos aunque tengas la app cerrada, actívalas manualmente desde los ajustes de notificaciones del navegador/teléfono para AlmacénPro, y luego reabre la app.</div>
+    </div>`;
   } else if(Notification.permission!=='granted'){
     html += `<div class="card">
-      <div class="small" style="margin-bottom:8px">Para que te avise mientras tienes la app abierta, activa las notificaciones.</div>
+      <div class="small" style="margin-bottom:8px">Activa las notificaciones para que te avisen los recordatorios y los pedidos — funciona aunque tengas la app cerrada o el teléfono bloqueado.</div>
       <button class="btn btn-outline btn-block" onclick="requestNotifPermission()">🔔 Activar notificaciones</button>
-      <div class="small muted mt-2">Aviso: solo funciona mientras la app está abierta en el teléfono — los navegadores no permiten que una página web despierte al teléfono estando cerrada. Para no perderte nada importante, revisa esta sección o la de Inicio.</div>
+    </div>`;
+  } else {
+    // El permiso ya está concedido, pero eso NO garantiza que este teléfono quedó registrado
+    // para recibir avisos de verdad (antes, si el permiso ya estaba en 'granted' por
+    // cualquier motivo, este botón se escondía por completo y no había ninguna forma de
+    // completar/reparar el registro — quedaba viendo notificaciones locales nada más,
+    // que solo funcionan con la app abierta).
+    html += `<div class="card">
+      <div class="small muted" style="margin-bottom:8px">✅ Permiso concedido. Si no te están llegando avisos con la app cerrada, toca este botón para confirmar que este teléfono quedó registrado.</div>
+      <button class="btn btn-outline btn-block btn-sm" onclick="subscribeToPush(true)">🔄 Confirmar registro de este dispositivo</button>
     </div>`;
   }
   if(!list.length){
@@ -3615,12 +3666,15 @@ function urlBase64ToUint8Array(base64String){
   for(let i=0;i<raw.length;i++) arr[i] = raw.charCodeAt(i);
   return arr;
 }
-async function subscribeToPush(){
-  if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+async function subscribeToPush(manual){
+  if(!('serviceWorker' in navigator) || !('PushManager' in window)){
+    if(manual) toast('Este navegador no admite notificaciones push');
+    return;
+  }
   if(!app.userId) return;
   try{
     const { data: cfg, error: cfgErr } = await sb.from('push_public_config').select('vapid_public_key').eq('id',1).single();
-    if(cfgErr || !cfg) { console.error('No se pudo leer la clave pública VAPID', cfgErr); return; }
+    if(cfgErr || !cfg) { console.error('No se pudo leer la clave pública VAPID', cfgErr); if(manual) toast('No se pudo activar: sin conexión con el servidor'); return; }
     const reg = await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub){
@@ -3630,11 +3684,14 @@ async function subscribeToPush(){
       });
     }
     const json = sub.toJSON();
-    await sb.from('push_subscriptions').upsert({
+    const { error: upsertErr } = await sb.from('push_subscriptions').upsert({
       user_id: app.userId, endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth
     }, {onConflict:'endpoint'});
+    if(upsertErr){ console.error('Error guardando suscripción push:', upsertErr); if(manual) toast('No se pudo registrar este dispositivo: '+upsertErr.message); return; }
+    if(manual) toast('✅ Este dispositivo va a recibir avisos, incluso con la app cerrada');
   }catch(err){
     console.error('Error suscribiendo a push:', err);
+    if(manual) toast('No se pudo activar: '+(err && err.message ? err.message : 'error desconocido'));
   }
 }
 async function sendPushToOthers(title, message, tag){
@@ -3654,7 +3711,7 @@ function requestNotifPermission(){
   if(!('Notification' in window)) return;
   Notification.requestPermission().then(perm=>{
     DB.settings.notifEnabled = (perm==='granted');
-    if(perm==='granted'){ getAudioCtx(); subscribeToPush(); } // "desbloquea" el audio aprovechando este gesto del usuario
+    if(perm==='granted'){ getAudioCtx(); subscribeToPush(true); } // "desbloquea" el audio aprovechando este gesto del usuario
     save();
     renderView();
   });
@@ -3665,7 +3722,7 @@ function openReminderForm(){
     <div class="field"><label>¿Qué tienes que hacer?</label><input type="text" id="rmTitle" placeholder="Ej. Ir al banco, comprar hielo..."></div>
     <div class="field-row">
       <div class="field"><label>Fecha</label><input type="date" id="rmDate" value="${todayISO()}"></div>
-      <div class="field"><label>Hora</label><input type="time" id="rmTime" value="09:00"></div>
+      <div class="field"><label>Hora</label><input type="time" id="rmTime" value="${nowTimeHHMM()}"></div>
     </div>
     <button class="btn btn-primary btn-block" onclick="saveReminder()">Guardar recordatorio</button>
   `);
@@ -3711,7 +3768,7 @@ function checkDueReminders(){
   (DB.reminders||[]).forEach(r=>{
     if(r.done || notifiedIds.has(r.id)) return;
     if(isReminderDue(r)){
-      try{ new Notification('⏰ '+r.title, {body:'Recordatorio de AlmacénPro', tag:'rem-'+r.id}); }catch(e){}
+      try{ const n = new Notification('⏰ '+r.title, {body:'Recordatorio de AlmacénPro', tag:'rem-'+r.id, icon:'./icon.png', badge:'./icon.png'}); n.onclick=()=>{ window.focus(); app.go('reminders'); n.close(); }; }catch(e){}
       playAlarmSound();
       notifiedIds.add(r.id); changed = true;
     }
@@ -3726,7 +3783,7 @@ function checkLowStockAlerts(){
   const lowIds = new Set(low.map(p=>p.id));
   low.forEach(p=>{
     if(alertedIds.has(p.id)) return;
-    try{ new Notification('⚠️ Stock bajo: '+p.name, {body:'Quedan '+p.stock+' unidades (mínimo '+p.minStock+')', tag:'stock-'+p.id}); }catch(e){}
+    try{ const n = new Notification('⚠️ Stock bajo: '+p.name, {body:'Quedan '+p.stock+' unidades (mínimo '+p.minStock+')', tag:'stock-'+p.id, icon:'./icon.png', badge:'./icon.png'}); n.onclick=()=>{ window.focus(); n.close(); }; }catch(e){}
     alertedIds.add(p.id); changed = true;
   });
   // si el producto se repuso por encima del mínimo, se vuelve a avisar la próxima vez que baje

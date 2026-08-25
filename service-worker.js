@@ -1,4 +1,12 @@
-const CACHE_NAME = 'almacenpro-v3';
+const CACHE_NAME = 'almacenpro-v4';
+// IMPORTANTE para quien edite esta app en el futuro: el navegador solo detecta que "hay una
+// actualización" cuando el CONTENIDO de ESTE archivo (service-worker.js) cambia — nunca por
+// cambios en index.html. Si se edita index.html sin subir también aquí el número de versión,
+// "Buscar actualización" seguirá diciendo (con razón, desde su punto de vista) "ya tienes la
+// última versión" en todos los teléfonos, aunque el código nuevo nunca llegue a nadie. Esto
+// fue la causa real de que un teléfono llevara varios días con código viejo pese a haber
+// "buscado actualización" muchas veces. Regla simple: cada vez que se suba un index.html
+// nuevo, subir también este número (v4, v5, v6...).
 const ASSETS = ['./', './index.html', './manifest.json', './icon.png'];
 
 self.addEventListener('message', (event) => {
@@ -39,11 +47,12 @@ self.addEventListener('push', (event) => {
 });
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const targetUrl = new URL('./index.html', self.registration.scope).href;
   event.waitUntil(
     self.clients.matchAll({type:'window', includeUncontrolled:true}).then((clientsArr) => {
-      const existing = clientsArr.find(c => c.url.includes(self.registration.scope));
+      const existing = clientsArr.find(c => c.url.startsWith(self.registration.scope));
       if(existing) return existing.focus();
-      return self.clients.openWindow('./index.html');
+      return self.clients.openWindow(targetUrl);
     })
   );
 });
