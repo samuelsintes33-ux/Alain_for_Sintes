@@ -1,4 +1,4 @@
-const CACHE_NAME = 'almacenpro-v4';
+const CACHE_NAME = 'almacenpro-v5';
 // IMPORTANTE para quien edite esta app en el futuro: el navegador solo detecta que "hay una
 // actualización" cuando el CONTENIDO de ESTE archivo (service-worker.js) cambia — nunca por
 // cambios en index.html. Si se edita index.html sin subir también aquí el número de versión,

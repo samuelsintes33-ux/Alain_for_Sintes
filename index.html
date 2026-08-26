@@ -898,20 +898,24 @@ async function syncPush(){
       // 20 de agosto de 2026.
       await syncUpsertTable('categories', DB.categories, c=>({id:c.id, name:c.name, data:c}));
 
-      // Además, se sanea category_id/subcategory_id de cada producto contra las categorías que
-      // existen REALMENTE ahora mismo en este dispositivo. Si un producto quedó apuntando a una
-      // categoría que ya no existe (por ejemplo, tras restaurar un archivo de respaldo viejo o
-      // incompleto), en vez de dejar que ESE producto tumbe la subida de TODOS los productos con
-      // un error de la base de datos, se sube igual pero sin esa categoría rota, y se avisa una
-      // sola vez para que se corrija a mano.
+      // BUG DE FONDO ENCONTRADO Y CORREGIDO (25 de agosto de 2026): la columna
+      // products.subcategory_id exige una llave foránea real hacia una tabla "subcategories"
+      // — pero esa tabla NUNCA se llena desde la app (las subcategorías solo existen anidadas
+      // dentro de category.subs, en el teléfono). Como esa tabla está SIEMPRE vacía, CUALQUIER
+      // producto con una subcategoría asignada rechazaba su fila con un error de la base de
+      // datos — y como Supabase sube todos los productos en un solo bloque, un solo producto
+      // así tumbaba la subida de TODO el inventario, sin excepción. Esto explica la pérdida
+      // total de productos que persistía incluso tras reinstalar la app en ambos teléfonos.
+      // Arreglo: subcategory_id ya NO se manda nunca a la nube (siempre null en esa columna).
+      // No se pierde información: el subId real de cada producto vive intacto dentro de
+      // "data", que es lo que la app usa de verdad para filtrar y mostrar — la columna
+      // subcategory_id nunca se leyó para nada, solo existía para integridad relacional.
       const validCatIds = new Set(DB.categories.map(c=>c.id));
-      const validSubIds = new Set(DB.categories.flatMap(c=>(c.subs||[]).map(s=>s.id)));
       let orphanCount = 0;
       const productRows = DB.products.map(p=>{
-        let catId = p.catId||null, subId = p.subId||null;
-        if(catId && !validCatIds.has(catId)){ orphanCount++; catId=null; subId=null; }
-        else if(subId && !validSubIds.has(subId)){ subId=null; }
-        return {id:p.id, category_id:catId, subcategory_id:subId, name:p.name, cost_price:p.costPrice||0, stock:p.stock||0, min_stock:p.minStock||0, data:p};
+        let catId = p.catId||null;
+        if(catId && !validCatIds.has(catId)){ orphanCount++; catId=null; }
+        return {id:p.id, category_id:catId, subcategory_id:null, name:p.name, cost_price:p.costPrice||0, stock:p.stock||0, min_stock:p.minStock||0, data:p};
       });
       if(orphanCount){
         if(!_warnedOrphanCats){
@@ -921,17 +925,17 @@ async function syncPush(){
       } else {
         _warnedOrphanCats = false;
       }
+      if(productRows.length){
+        const { error } = await sb.from('products').upsert(productRows, {onConflict:'id'});
+        if(error){ console.error('Sync products', error); }
+        else { const set = _syncedIds['products'] || (_syncedIds['products']=new Set()); DB.products.forEach(p=>set.add(p.id)); }
+      }
+      // Clientes también se esperan antes del resto: varias tablas (ventas, pagos, pedidos,
+      // consignaciones...) tienen su propia llave foránea hacia clients(id), con el mismo
+      // riesgo de carrera que categorías→productos si se mandaran en paralelo.
+      await syncUpsertTable('clients', DB.clients, c=>({id:c.id, name:c.name, phone:c.phone||null, description:c.desc||'', data:c}));
 
       await Promise.all([
-        (async ()=>{
-          if(!productRows.length) return true;
-          const { error } = await sb.from('products').upsert(productRows, {onConflict:'id'});
-          if(error){ console.error('Sync products', error); return false; }
-          const set = _syncedIds['products'] || (_syncedIds['products']=new Set());
-          DB.products.forEach(p=>set.add(p.id));
-          return true;
-        })(),
-        syncUpsertTable('clients', DB.clients, c=>({id:c.id, name:c.name, phone:c.phone||null, description:c.desc||'', data:c})),
         // Antes NO se mandaba "time" aquí: la hora del recordatorio se quedaba en null en la
         // nube (solo vivía dentro de "data"), así que cualquier revisión hecha desde el
         // servidor (para el aviso con la app cerrada) no sabía la hora real y asumía "fin del
@@ -4006,11 +4010,16 @@ function renderOrderItemsList(editable, order){
     const inputId = order ? `ordQty_${order.id}_${i}` : `ordDraftQty_${i}`;
     const qtyChangeAttr = order ? `onchange="setOrderItemQty('${order.id}',${i},this.value)"` : `onchange="setOrderItemQty(null,${i},this.value)"`;
     const removeAction = editable ? (order?`removeOrderDetailItem('${order.id}',${i})`:`window._orderDraft.items.splice(${i},1);renderOrderFormSheet()`) : null;
+    // Se muestra el stock del almacén junto al producto (si tiene inventario asociado), para
+    // decidir la cantidad sin tener que ir a revisar Inventario aparte. No bloquea escribir
+    // más de lo que hay (a veces se acomoda a sabiendas de que hay que reponer), solo avisa.
+    const stockProd = it.productId ? DB.products.find(pr=>pr.id===it.productId) : null;
+    const stockNote = stockProd ? `<span class="${stockProd.stock<it.qty?'':'muted'}" style="${stockProd.stock<it.qty?'color:var(--danger)':''}"> · stock: ${stockProd.stock}</span>` : '';
     return `
     <div class="list-item" style="${it.picked?'opacity:.5':''}">
       ${checklist?`<button type="button" class="qty-btn" style="font-size:17px" onclick="toggleOrderItemPicked('${order.id}',${i})">${it.picked?'☑️':'⬜'}</button>`:''}
       <div class="li-body"><div class="li-title" style="${it.picked?'text-decoration:line-through':''}">${esc(it.name)}${it.productId?'':' <span class="small muted">(fuera de inventario)</span>'}</div>
-        <div class="li-sub">${fmt(it.price)} c/u${editable?'':' · '+it.qty+' un.'}</div></div>
+        <div class="li-sub">${fmt(it.price)} c/u${editable?'':' · '+it.qty+' un.'}${stockNote}</div></div>
       ${editable?`<div class="qty-ctl">
         <button type="button" class="qty-btn" onclick="bumpOrderItemQty(${order?`'${order.id}'`:null},${i},-1)">−</button>
         <input type="number" class="mono cart-qty-input" id="${inputId}" value="${it.qty}" style="width:52px" ${qtyChangeAttr}>
