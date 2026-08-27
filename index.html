@@ -883,10 +883,31 @@ function withSyncLock(fn){
   return run;
 }
 
+async function ensureFreshSession(){
+  // Antes, syncPush()/syncPullAll() nunca comprobaban si la sesión seguía siendo válida —
+  // solo miraban app.userId (una variable local). Si el teléfono pasaba muchas horas con la
+  // app cerrada, el token de sesión podía quedar vencido; al reabrir, la primera
+  // sincronización mandaba ese token viejo y la nube rechazaba TODO con error 401, en todas
+  // las tablas a la vez. sb.auth.getSession() renueva el token solo si hace falta antes de
+  // devolverlo, así que llamarlo primero evita mandar una sesión muerta.
+  try{
+    const { data, error } = await sb.auth.getSession();
+    if(error || !data.session){
+      console.error('Sesión no válida al sincronizar', error);
+      return false;
+    }
+    return true;
+  }catch(err){
+    console.error('Error comprobando la sesión', err);
+    return false;
+  }
+}
 async function syncPush(){
   if(!app.userId) return;
   if(_syncBusy){ _syncPending = true; return; }
   _syncBusy = true;
+  const ok = await ensureFreshSession();
+  if(!ok){ _syncBusy = false; return; }
   return withSyncLock(async ()=>{
     _lastPushAt = Date.now();
     try{
@@ -995,6 +1016,8 @@ async function syncPush(){
 }
 
 async function syncPullAll(){
+  const ok = await ensureFreshSession();
+  if(!ok) return;
   return withSyncLock(_syncPullAllInner);
 }
 async function manualSyncNow(){
@@ -1002,6 +1025,11 @@ async function manualSyncNow(){
   const btn = document.getElementById('btnCloudSync');
   if(btn){ btn.disabled = true; btn.classList.add('spin'); }
   try{
+    const sessionOk = await ensureFreshSession();
+    if(!sessionOk){
+      toast('Tu sesión venció — cierra sesión y vuelve a entrar con tu usuario y contraseña');
+      return;
+    }
     // Orden fijo, tal como se pidió: primero sube lo de este teléfono, y solo después baja lo
     // que haga falta de la nube (que ahora se fusiona, nunca reemplaza — ver _syncPullAllInner).
     await syncPush();
