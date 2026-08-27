@@ -570,6 +570,14 @@ function toast(msg){
 }
 
 /* ---------------- UI: sheet / modal ---------------- */
+// Recuerda cómo volver a dibujar la ventana (sheet/picker) que esté abierta ahora mismo, para
+// poder refrescarla con datos frescos cuando llega un cambio de otro dispositivo — antes,
+// renderView() solo actualizaba la pantalla de fondo, nunca lo que hubiera abierto encima
+// (ej. "Confirmar pedido"), así que se podía quedar viendo información vieja (como un
+// checklist de acomodo ya cerrado en otro teléfono, pero todavía tocable aquí) hasta cerrar
+// y volver a abrir esa ventana a mano.
+let _activeDetailRefresh = null;
+function setActiveDetailRefresh(fn){ _activeDetailRefresh = fn; }
 const ui = {
   openSheet(html){
     document.getElementById('sheet').innerHTML =
@@ -580,6 +588,7 @@ const ui = {
   },
   closeSheet(){
     document.getElementById('overlay').classList.remove('active');
+    _activeDetailRefresh = null;
   },
   openPicker(html){
     document.getElementById('pickerSheetEl').innerHTML =
@@ -589,6 +598,7 @@ const ui = {
   },
   closePicker(){
     document.getElementById('pickerOverlay').classList.remove('active');
+    _activeDetailRefresh = null;
   }
 };
 
@@ -1043,6 +1053,7 @@ async function manualSyncNow(){
   }finally{
     if(btn){ btn.disabled = false; btn.classList.remove('spin'); }
     renderView();
+    if(_activeDetailRefresh) _activeDetailRefresh();
   }
 }
 async function _syncPullAllInner(){
@@ -1113,7 +1124,18 @@ async function _syncPullAllInner(){
   const remoteCevt = unwrap(cevt);
   const remoteCnote = unwrap(cnote);
 
-  DB.categories = remoteCats.length || DB.categories.length ? mergeArr(DB.categories, remoteCats) : defaultDB().categories;
+  // BUG ENCONTRADO Y CORREGIDO (26 de agosto de 2026): antes, cada vez que esta función se
+  // ejecutaba (login, cada pull automático, cada sincronización manual...) y encontraba que
+  // TODAVÍA no había categorías ni local ni remotamente (por ejemplo, justo después de un
+  // reseteo, antes de que la primera sincronización terminara de propagarse), creaba una
+  // categoría "General" NUEVA, con un id aleatorio distinto cada vez. Si esa ventana se
+  // repetía varias veces seguidas (varios pulls antes de que el primero terminara de subir),
+  // terminaban quedando varias categorías "General" duplicadas, sin relación entre sí, y sin
+  // ninguna forma de saber cuál era "la buena". La categoría por defecto ya se siembra UNA
+  // sola vez, en defaultDB(), la primerísima vez que se abre la app sin datos guardados —
+  // aquí ya no hace falta (ni es seguro) volver a inventar una si simplemente están vacías
+  // las dos: puede ser perfectamente normal que de verdad no haya ninguna todavía.
+  DB.categories = mergeArr(DB.categories, remoteCats);
   DB.products = mergeArr(DB.products, remoteProds);
   DB.clients = mergeArr(DB.clients, remoteClis);
   DB.reminders = mergeArr(DB.reminders, remoteRems);
@@ -1240,6 +1262,11 @@ function handleRemoteChange(payload){
       // no interrumpe mientras se escribe; la notificación/sonido de arriba ya avisó igual
     } else {
       renderView();
+      // Antes, si tenías abierta una ventana de detalle (ej. "Confirmar pedido") cuando llegaba
+      // un cambio de otro dispositivo, esa ventana se quedaba mostrando datos viejos — solo se
+      // actualizaba la pantalla de fondo. Ahora, si hay una ventana con función de refresco
+      // registrada, también se vuelve a dibujar con los datos ya frescos.
+      if(_activeDetailRefresh) _activeDetailRefresh();
     }
   }, 800);
 }
@@ -1577,6 +1604,7 @@ function viewInventory(){
     <div class="tab-pill ${!ctx.catId?'active':''}" onclick="app.invContext.catId=null;app.invContext.subId=null;renderView()">Todos</div>
     ${DB.categories.map(c=>`<div class="tab-pill ${ctx.catId===c.id?'active':''}" onclick="app.invContext.catId='${c.id}';app.invContext.subId=null;renderView()">${esc(c.name)}</div>`).join('')}
     ${isAdmin? `<div class="tab-pill" onclick="openCategoryForm()">+ Categoría</div>`:''}
+    ${isAdmin && DB.categories.length? `<div class="tab-pill" onclick="openCategoryManager()">⚙️ Gestionar</div>`:''}
   </div>`;
 
   if(ctx.catId){
@@ -1618,6 +1646,82 @@ function viewInventory(){
   return html;
 }
 
+function openCategoryManager(){
+  if(app.role!=='admin') return;
+  const rows = DB.categories.map(c=>{
+    const prodCount = DB.products.filter(p=>p.catId===c.id).length;
+    const subsHtml = (c.subs||[]).map(s=>{
+      const subCount = DB.products.filter(p=>p.subId===s.id).length;
+      return `<div class="list-item" style="padding-left:24px">
+        <div class="li-body"><div class="li-title small">↳ ${esc(s.name)}</div><div class="li-sub">${subCount} producto(s)</div></div>
+        <button class="btn btn-outline btn-sm" onclick="renameSubcat('${c.id}','${s.id}')">✏️</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteSubcat('${c.id}','${s.id}')">🗑️</button>
+      </div>`;
+    }).join('');
+    return `<div class="list-item">
+      <div class="li-body"><div class="li-title">${esc(c.name)}</div><div class="li-sub">${prodCount} producto(s)${c.subs&&c.subs.length?' · '+c.subs.length+' subcategoría(s)':''}</div></div>
+      <button class="btn btn-outline btn-sm" onclick="renameCategory('${c.id}')">✏️</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteCategory('${c.id}')">🗑️</button>
+    </div>${subsHtml}`;
+  }).join('') || `<div class="small muted">No hay categorías todavía.</div>`;
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Gestionar categorías</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="stack">${rows}</div>
+    <button class="btn btn-outline btn-block mt-3" onclick="ui.closeSheet();openCategoryForm()">+ Nueva categoría</button>
+  `);
+}
+function renameCategory(id){
+  const c = DB.categories.find(c=>c.id===id);
+  if(!c) return;
+  const name = prompt('Nuevo nombre de la categoría:', c.name);
+  if(name===null) return; // canceló
+  if(!name.trim()) return toast('El nombre no puede quedar vacío');
+  c.name = name.trim();
+  save(); openCategoryManager(); renderView();
+}
+function deleteCategory(id){
+  const c = DB.categories.find(c=>c.id===id);
+  if(!c) return;
+  const count = DB.products.filter(p=>p.catId===id).length;
+  const msg = count>0
+    ? `Hay ${count} producto(s) en "${c.name}". Si la borras, esos productos quedan sin categoría (no se borran ellos). ¿Borrar la categoría?`
+    : `¿Borrar la categoría "${c.name}"?`;
+  if(!confirm(msg)) return;
+  DB.products.forEach(p=>{ if(p.catId===id){ p.catId=null; p.subId=null; } });
+  DB.categories = DB.categories.filter(x=>x.id!==id);
+  if(app.invContext.catId===id){ app.invContext.catId=null; app.invContext.subId=null; }
+  // Borrado explícito y puntual en la nube — igual que removeClient/removeOrder/removeReminder.
+  if(app.userId){
+    sb.from('categories').delete().eq('id', id).then(({error})=>{
+      if(error) console.error('No se pudo borrar la categoría en la nube', error);
+    });
+  }
+  const set = _syncedIds['categories']; if(set) set.delete(id);
+  save(); openCategoryManager(); renderView();
+}
+function renameSubcat(catId, subId){
+  const c = DB.categories.find(c=>c.id===catId);
+  const s = c && (c.subs||[]).find(s=>s.id===subId);
+  if(!s) return;
+  const name = prompt('Nuevo nombre de la subcategoría:', s.name);
+  if(name===null) return;
+  if(!name.trim()) return toast('El nombre no puede quedar vacío');
+  s.name = name.trim();
+  save(); openCategoryManager(); renderView();
+}
+function deleteSubcat(catId, subId){
+  const c = DB.categories.find(c=>c.id===catId);
+  if(!c) return;
+  const count = DB.products.filter(p=>p.subId===subId).length;
+  const msg = count>0
+    ? `Hay ${count} producto(s) en esta subcategoría. Si la borras, quedan sin subcategoría (no se borran ellos). ¿Borrar la subcategoría?`
+    : '¿Borrar esta subcategoría?';
+  if(!confirm(msg)) return;
+  DB.products.forEach(p=>{ if(p.subId===subId) p.subId=null; });
+  c.subs = (c.subs||[]).filter(x=>x.id!==subId);
+  if(app.invContext.subId===subId) app.invContext.subId=null;
+  save(); openCategoryManager(); renderView();
+}
 function openCategoryForm(){
   ui.openSheet(`
     <div class="sheet-header"><div class="sheet-title">Nueva categoría</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
@@ -4101,7 +4205,8 @@ function saveNewOrder(){
 function openOrderDetail(id){
   window._orderDetailId = id;
   const o = DB.orders.find(o=>o.id===id);
-  if(!o) return;
+  if(!o){ ui.closeSheet(); return; }
+  setActiveDetailRefresh(()=>openOrderDetail(id));
   const name = o.clientName || (DB.clients.find(c=>c.id===o.clientId)||{}).name || 'Sin cliente';
   const editable = (o.status==='pedido' || o.status==='preparando');
   let actions = '';
