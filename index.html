@@ -912,12 +912,44 @@ async function ensureFreshSession(){
     return false;
   }
 }
+const RESET_TOKEN_KEY = 'almacenpro_last_reset_token';
+// Detecta si OTRO dispositivo restableció la aplicación desde la última vez que este
+// teléfono se conectó. Funciona con un código único (no una casilla marcada/desmarcada,
+// que se quedaría "pegada" en true para siempre): cada restablecimiento genera un código
+// nuevo y lo guarda en la nube (app_settings.reset_token). Cada dispositivo recuerda cuál
+// fue el ÚLTIMO código que ya aplicó (guardado aparte, fuera de los datos normales, para que
+// sobreviva un restablecimiento local). Si el código de la nube no coincide con el que este
+// teléfono ya aplicó, significa "hubo un restablecimiento en otro lado que yo no hice
+// todavía" — así que se vacía también aquí, ANTES de subir nada, evitando exactamente el
+// problema reportado: un dispositivo con datos viejos revivía lo que se acababa de borrar.
+async function checkForRemoteReset(){
+  if(!app.userId) return false;
+  try{
+    const { data, error } = await sb.from('app_settings').select('reset_token').eq('id',1).single();
+    if(error || !data || !data.reset_token) return false;
+    const known = localStorage.getItem(RESET_TOKEN_KEY);
+    if(data.reset_token !== known){
+      DB = defaultDB();
+      saveLocalOnly();
+      localStorage.setItem(RESET_TOKEN_KEY, data.reset_token);
+      Object.keys(_syncedIds).forEach(k=>_syncedIds[k]=new Set());
+      toast('📱 La aplicación se restableció desde otro dispositivo — este teléfono también se vació');
+      applySettings(); renderView();
+      return true;
+    }
+    return false;
+  }catch(err){
+    console.error('Error comprobando restablecimiento remoto', err);
+    return false;
+  }
+}
 async function syncPush(){
   if(!app.userId) return;
   if(_syncBusy){ _syncPending = true; return; }
   _syncBusy = true;
   const ok = await ensureFreshSession();
   if(!ok){ _syncBusy = false; return; }
+  await checkForRemoteReset();
   return withSyncLock(async ()=>{
     _lastPushAt = Date.now();
     try{
@@ -1028,6 +1060,7 @@ async function syncPush(){
 async function syncPullAll(){
   const ok = await ensureFreshSession();
   if(!ok) return;
+  await checkForRemoteReset();
   return withSyncLock(_syncPullAllInner);
 }
 async function manualSyncNow(){
@@ -1547,6 +1580,78 @@ function catName(id){ const c=DB.categories.find(c=>c.id===id); return c?c.name:
 function subName(catId,subId){ const c=DB.categories.find(c=>c.id===catId); const s=c&&c.subs.find(s=>s.id===subId); return s?s.name:''; }
 
 function activeProducts(){ return DB.products.filter(p=>!p.deletedAt); }
+// Ventana de opciones: en vez de varios botones fijos (nombre solo / con cantidad / con
+// precio / con los dos), se elige aquí qué incluir cada vez que se copia — cubre las 4
+// combinaciones que se pidieron sin llenar la pantalla de botones.
+function openCopyInventoryOptions(){
+  const ctx = app.invContext;
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Copiar lista para WhatsApp</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="small muted" style="margin-bottom:10px">${ctx.catId? 'Se va a copiar solo la categoría que tienes abierta.' : 'Se va a copiar todo el inventario en existencia, agrupado por categoría.'}</div>
+    <label class="row" style="cursor:pointer;padding:8px 0" onclick="this.querySelector('input').click()">
+      <span class="small">Incluir cantidad en existencia</span>
+      <input type="checkbox" id="copyIncQty">
+    </label>
+    <label class="row" style="cursor:pointer;padding:8px 0" onclick="this.querySelector('input').click()">
+      <span class="small">Incluir precio de venta</span>
+      <input type="checkbox" id="copyIncPrice">
+    </label>
+    <button class="btn btn-primary btn-block mt-3" onclick="copyInventoryList(document.getElementById('copyIncQty').checked, document.getElementById('copyIncPrice').checked)">📋 Copiar</button>
+  `);
+}
+function copyInventoryList(includeQty, includePrice){
+  const ctx = app.invContext;
+  const lineFor = (p) => {
+    let line = '• '+p.name;
+    const extras = [];
+    if(includeQty) extras.push(p.stock+' disponible'+(p.stock===1?'':'s'));
+    if(includePrice && p.prices && p.prices[0]) extras.push(fmt(p.prices[0].price));
+    if(extras.length) line += ' — '+extras.join(' — ');
+    return line;
+  };
+  let cats = ctx.catId ? DB.categories.filter(c=>c.id===ctx.catId) : DB.categories;
+  const lines = [];
+  cats.forEach(c=>{
+    const prods = activeProducts().filter(p=>{
+      if(p.catId!==c.id) return false;
+      if(ctx.subId && p.subId!==ctx.subId) return false;
+      return (p.stock||0) > 0;
+    }).sort((a,b)=>a.name.localeCompare(b.name));
+    if(!prods.length) return;
+    lines.push('*'+c.name+'*');
+    prods.forEach(p=>lines.push(lineFor(p)));
+    lines.push('');
+  });
+  if(!ctx.catId){
+    const noCat = activeProducts().filter(p=>!p.catId && (p.stock||0)>0).sort((a,b)=>a.name.localeCompare(b.name));
+    if(noCat.length){
+      lines.push('*Otros*');
+      noCat.forEach(p=>lines.push(lineFor(p)));
+      lines.push('');
+    }
+  }
+  const text = lines.join('\n').trim();
+  if(!text){ toast('No hay productos en existencia para copiar'); return; }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(()=>{
+      ui.closeSheet();
+      toast('✅ Lista copiada — pégala en WhatsApp');
+    }).catch(()=>{
+      copyInventoryListFallback(text);
+    });
+  } else {
+    copyInventoryListFallback(text);
+  }
+}
+function copyInventoryListFallback(text){
+  // Respaldo por si el navegador bloquea el portapapeles automático (pasa a veces sin HTTPS
+  // o sin el gesto directo del usuario): muestra el texto en una ventana para copiarlo a mano.
+  ui.openSheet(`
+    <div class="sheet-header"><div class="sheet-title">Copiar lista</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
+    <div class="small muted" style="margin-bottom:8px">No se pudo copiar automático — mantén presionado el texto de abajo y elige "Copiar todo".</div>
+    <textarea readonly style="width:100%;min-height:260px;padding:10px;border-radius:10px;border:1px solid var(--border)">${esc(text)}</textarea>
+  `);
+}
 function isReminderDue(r){
   const [y,m,d] = r.date.split('-').map(Number);
   const [hh,mm] = (r.time||'23:59').split(':').map(Number);
@@ -1606,6 +1711,8 @@ function viewInventory(){
     ${isAdmin? `<div class="tab-pill" onclick="openCategoryForm()">+ Categoría</div>`:''}
     ${isAdmin && DB.categories.length? `<div class="tab-pill" onclick="openCategoryManager()">⚙️ Gestionar</div>`:''}
   </div>`;
+
+  html += `<button class="btn btn-outline btn-block btn-sm mt-2" onclick="openCopyInventoryOptions()">📋 Copiar lista para WhatsApp${ctx.catId?' (esta categoría)':''}</button>`;
 
   if(ctx.catId){
     const cat = DB.categories.find(c=>c.id===ctx.catId);
@@ -5076,6 +5183,13 @@ async function resetApp(){
     try{ await sb.from(t).delete().not('id','is', null); }catch(err){ console.error('Reset '+t, err); }
   }
   try{ await sb.from('client_product_prices').delete().not('client_id','is', null); }catch(err){ console.error('Reset client_product_prices', err); }
+  // Se avisa a los DEMÁS dispositivos: un código nuevo en app_settings.reset_token que
+  // cualquier otro teléfono va a detectar apenas se conecte (checkForRemoteReset), ANTES de
+  // subir nada — así también se vacían solos, en vez de revivir sus datos viejos hacia la
+  // nube que se acaba de limpiar. Este mismo teléfono guarda el código ya como "aplicado".
+  const resetToken = uid()+'-'+Date.now();
+  try{ await sb.from('app_settings').upsert({id:1, reset_token:resetToken}, {onConflict:'id'}); }catch(err){ console.error('No se pudo avisar el restablecimiento', err); }
+  localStorage.setItem(RESET_TOKEN_KEY, resetToken);
   Object.keys(_syncedIds).forEach(k=>_syncedIds[k]=new Set());
   DB = defaultDB();
   save(); applySettings(); toast('Aplicación restablecida para todo el equipo, incluida la nube'); app.go('home');
