@@ -1580,7 +1580,51 @@ function catName(id){ const c=DB.categories.find(c=>c.id===id); return c?c.name:
 function subName(catId,subId){ const c=DB.categories.find(c=>c.id===catId); const s=c&&c.subs.find(s=>s.id===subId); return s?s.name:''; }
 
 function activeProducts(){ return DB.products.filter(p=>!p.deletedAt); }
-// Ventana de opciones: en vez de varios botones fijos (nombre solo / con cantidad / con
+// Mensaje detallado para un cliente puntual: qué mercancía tiene depositada (con precio y
+// subtotal, ya que aquí sí se pidió "información detallada") y su estado de cuenta actual —
+// listo para copiar y mandar por WhatsApp. Usa los mismos cálculos que ya se muestran en su
+// ficha (clientProductStockMap, getClientProductPrice, clientDebt), así nunca se puede
+// desincronizar del número que el cliente vería en la app.
+function copyClientStatement(clientId){
+  const c = DB.clients.find(x=>x.id===clientId);
+  if(!c) return;
+  const stockMap = clientProductStockMap(clientId);
+  const heldProducts = Object.keys(stockMap).filter(pid=>stockMap[pid]>0);
+  const lines = [];
+  lines.push('*Estado de cuenta — '+c.name+'*');
+  lines.push('Fecha: '+new Date().toLocaleDateString('es-MX', {day:'2-digit', month:'2-digit', year:'numeric'}));
+  lines.push('');
+  if(heldProducts.length){
+    lines.push('*Mercancía en su almacén:*');
+    let totalValue = 0;
+    heldProducts.forEach(pid=>{
+      const p = DB.products.find(p=>p.id===pid);
+      const price = getClientProductPrice(clientId,pid)||0;
+      const qty = stockMap[pid];
+      const subtotal = qty*price;
+      totalValue += subtotal;
+      lines.push('• '+(p?p.name:'?')+' — '+qty+' un. x '+fmt(price)+' = '+fmt(subtotal));
+    });
+    lines.push('');
+    lines.push('Total en mercancía: '+fmt(totalValue));
+  } else {
+    lines.push('Sin mercancía depositada actualmente.');
+  }
+  lines.push('');
+  const debt = clientDebt(clientId);
+  lines.push('*Estado de cuenta:*');
+  lines.push(debt>0 ? 'Debe: '+fmt(debt) : 'Al día, sin deuda pendiente');
+  const text = lines.join('\n');
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(()=>{
+      toast('✅ Estado copiado — pégalo en WhatsApp');
+    }).catch(()=>{
+      copyInventoryListFallback(text);
+    });
+  } else {
+    copyInventoryListFallback(text);
+  }
+}
 // precio / con los dos), se elige aquí qué incluir cada vez que se copia — cubre las 4
 // combinaciones que se pidieron sin llenar la pantalla de botones.
 function openCopyInventoryOptions(){
@@ -1588,11 +1632,11 @@ function openCopyInventoryOptions(){
   ui.openSheet(`
     <div class="sheet-header"><div class="sheet-title">Copiar lista para WhatsApp</div><button class="sheet-close" onclick="ui.closeSheet()">✕</button></div>
     <div class="small muted" style="margin-bottom:10px">${ctx.catId? 'Se va a copiar solo la categoría que tienes abierta.' : 'Se va a copiar todo el inventario en existencia, agrupado por categoría.'}</div>
-    <label class="row" style="cursor:pointer;padding:8px 0" onclick="this.querySelector('input').click()">
+    <label class="row" style="cursor:pointer;padding:8px 0">
       <span class="small">Incluir cantidad en existencia</span>
       <input type="checkbox" id="copyIncQty">
     </label>
-    <label class="row" style="cursor:pointer;padding:8px 0" onclick="this.querySelector('input').click()">
+    <label class="row" style="cursor:pointer;padding:8px 0">
       <span class="small">Incluir precio de venta</span>
       <input type="checkbox" id="copyIncPrice">
     </label>
@@ -3373,6 +3417,7 @@ function openClientDetail(id){
     </div>
     <div class="section-title">Mercancía en su almacén</div>
     <div class="card">${stockHtml}</div>
+    <button class="btn btn-outline btn-block btn-sm mt-2" onclick="copyClientStatement('${c.id}')">📋 Copiar estado para enviar</button>
     <div class="gap-2 mt-2">
       <button class="btn btn-outline btn-block btn-sm" onclick="openClientDepositForm('${c.id}')">📦 Depositar</button>
       <button class="btn btn-outline btn-block btn-sm" onclick="openClientReportSaleForm('${c.id}')">🧾 Venta reportada</button>
